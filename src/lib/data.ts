@@ -1,5 +1,7 @@
 import "server-only";
 import bcrypt from "bcryptjs";
+import { prisma } from "./prisma";
+import { slugify } from "./utils";
 import type {
   Category,
   Product,
@@ -16,396 +18,273 @@ import type {
   Notification,
   Coupon,
 } from "./types";
-import { slugify } from "./utils";
+
+// =============================================================================
+// HOW TO USE THIS FILE
+// =============================================================================
+// This is the real Postgres-backed implementation of every function in
+// data.ts, written against prisma/schema.prisma. It was written and
+// schema-checked by hand but NOT compiled or run against a live database —
+// the sandbox this project was built in can't reach binaries.prisma.sh to
+// download Prisma's engine, so `prisma generate` fails there. It will work
+// normally in your environment. To switch over:
+//
+//   1. In .env, set DATABASE_URL to your Postgres connection string.
+//   2. npx prisma generate
+//   3. npx prisma migrate dev --name init
+//   4. npx prisma db seed          (runs prisma/seed.ts — same demo data
+//                                    currently hardcoded in data.ts)
+//   5. mv src/lib/data.ts src/lib/data.memory.ts
+//   6. mv src/lib/data.db.ts src/lib/data.ts
+//   7. npm run build   — fix any type errors the real generated Prisma
+//      types surface (there may be small drift; this file was written
+//      carefully but unverified — see README "Going to production")
+//   8. Manually re-test the flows in the checklist in the README before
+//      trusting this in production: register, login, browse, add to cart,
+//      checkout, admin product/category/blog/page CRUD, order status
+//      update + tracking email, review moderation, tax rate CRUD.
+//
+// Every function below has the exact same name and signature as its
+// data.ts counterpart, so nothing else in the app needs to change.
+// =============================================================================
+
+function toUndef<T>(v: T | null | undefined): T | undefined {
+  return v === null ? undefined : v;
+}
 
 // ---------------------------------------------------------------------------
-// In-memory data store. Shaped to match the Prisma schema 1:1 so this file
-// is the only thing that needs to change when a real database is wired up.
-// State resets whenever the server process restarts — expected for a demo.
+// Mappers: Prisma row shapes -> app types
 // ---------------------------------------------------------------------------
 
-export const categories: Category[] = [
-  { id: "cat_packs", name: "Packs & Bags", slug: "packs", description: "Load carry for trail, city and everywhere between." },
-  { id: "cat_outerwear", name: "Outerwear", slug: "outerwear", description: "Shells, insulation and layers built for weather." },
-  { id: "cat_tools", name: "Tools & Kit", slug: "tools", description: "The small gear that earns its weight." },
-];
+function mapCategory(c: {
+  id: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  parentId: string | null;
+  metaTitle: string | null;
+  metaDescription: string | null;
+}): Category {
+  return {
+    id: c.id,
+    name: c.name,
+    slug: c.slug,
+    description: toUndef(c.description),
+    parentId: c.parentId,
+    metaTitle: toUndef(c.metaTitle),
+    metaDescription: toUndef(c.metaDescription),
+  };
+}
 
-export const products: Product[] = [
-  {
-    id: "p_ridge35",
-    slug: "ridge-35-pack",
-    name: "Ridge 35 Pack",
-    description:
-      "A 35-litre haul pack built from 420D recycled ripstop, with a hip belt that actually stays put on a long approach. Roll-top closure, external lash points, one main compartment — no gimmicks.",
-    price: 18900,
-    comparePrice: 21900,
-    stock: 24,
-    featured: true,
-    categoryId: "cat_packs",
-    images: [{ url: "", altText: "Ridge 35 Pack", isMain: true }],
-    variants: [
-      { id: "v1", label: "Moss", stock: 12, priceDiff: 0 },
-      { id: "v2", label: "Slate", stock: 12, priceDiff: 0 },
-    ],
-    rating: 4.7,
-    reviewCount: 132,
-    createdAt: "2026-05-02",
-  },
-  {
-    id: "p_switchback",
-    slug: "switchback-hip-pack",
-    name: "Switchback Hip Pack",
-    description:
-      "A 4-litre hip pack for the stuff you need without breaking stride: phone, map, snacks, first aid. Dual zip access, water-resistant coated zippers.",
-    price: 5400,
-    stock: 41,
-    featured: false,
-    categoryId: "cat_packs",
-    images: [{ url: "", altText: "Switchback Hip Pack", isMain: true }],
-    variants: [
-      { id: "v1", label: "Clay", stock: 20, priceDiff: 0 },
-      { id: "v2", label: "Forest", stock: 21, priceDiff: 0 },
-    ],
-    rating: 4.5,
-    reviewCount: 58,
-    createdAt: "2026-04-18",
-  },
-  {
-    id: "p_daypack18",
-    slug: "commuter-18-daypack",
-    name: "Commuter 18 Daypack",
-    description:
-      "18 litres, laptop sleeve up to 15in, one strap that doesn't dig in on a bike commute. Built for people who leave the house before sunrise.",
-    price: 9800,
-    stock: 33,
-    featured: true,
-    categoryId: "cat_packs",
-    images: [{ url: "", altText: "Commuter 18 Daypack", isMain: true }],
-    variants: [{ id: "v1", label: "Charcoal", stock: 33, priceDiff: 0 }],
-    rating: 4.6,
-    reviewCount: 91,
-    createdAt: "2026-03-11",
-  },
-  {
-    id: "p_stormshell",
-    slug: "stormline-shell-jacket",
-    name: "Stormline Shell Jacket",
-    description:
-      "A 3-layer waterproof shell rated to 20,000mm hydrostatic head, pit zips for venting, and a helmet-compatible hood. Made for weather you didn't check the forecast for.",
-    price: 24900,
-    comparePrice: 28900,
-    stock: 17,
-    featured: true,
-    categoryId: "cat_outerwear",
-    images: [{ url: "", altText: "Stormline Shell Jacket", isMain: true }],
-    variants: [
-      { id: "v1", label: "S / Moss", stock: 4, priceDiff: 0 },
-      { id: "v2", label: "M / Moss", stock: 5, priceDiff: 0 },
-      { id: "v3", label: "L / Moss", stock: 4, priceDiff: 0 },
-      { id: "v4", label: "M / Rust", stock: 4, priceDiff: 500 },
-    ],
-    rating: 4.8,
-    reviewCount: 204,
-    createdAt: "2026-01-22",
-  },
-  {
-    id: "p_insulator",
-    slug: "midweight-insulator",
-    name: "Midweight Insulator",
-    description:
-      "Synthetic fill that keeps its loft when wet, packs down to the size of a water bottle. Your go-to layer three seasons out of four.",
-    price: 15900,
-    stock: 29,
-    featured: false,
-    categoryId: "cat_outerwear",
-    images: [{ url: "", altText: "Midweight Insulator", isMain: true }],
-    variants: [
-      { id: "v1", label: "M / Ink", stock: 15, priceDiff: 0 },
-      { id: "v2", label: "L / Ink", stock: 14, priceDiff: 0 },
-    ],
-    rating: 4.4,
-    reviewCount: 76,
-    createdAt: "2026-02-09",
-  },
-  {
-    id: "p_basecamp_hood",
-    slug: "basecamp-fleece-hood",
-    name: "Basecamp Fleece Hood",
-    description:
-      "Grid fleece hoodie for camp evenings and cold mornings. Thumb loops, kangaroo pocket, no logos shouting from the chest.",
-    price: 8900,
-    stock: 38,
-    featured: false,
-    categoryId: "cat_outerwear",
-    images: [{ url: "", altText: "Basecamp Fleece Hood", isMain: true }],
-    variants: [
-      { id: "v1", label: "S", stock: 12, priceDiff: 0 },
-      { id: "v2", label: "M", stock: 13, priceDiff: 0 },
-      { id: "v3", label: "L", stock: 13, priceDiff: 0 },
-    ],
-    rating: 4.6,
-    reviewCount: 63,
-    createdAt: "2026-04-01",
-  },
-  {
-    id: "p_multitool",
-    slug: "trailhand-multitool",
-    name: "Trailhand Multitool",
-    description:
-      "15 tools in a body that fits a jacket pocket. Locking blade, pliers that don't pinch, a bottle opener you'll use more than the saw.",
-    price: 6900,
-    stock: 52,
-    featured: true,
-    categoryId: "cat_tools",
-    images: [{ url: "", altText: "Trailhand Multitool", isMain: true }],
-    variants: [{ id: "v1", label: "Standard", stock: 52, priceDiff: 0 }],
-    rating: 4.9,
-    reviewCount: 311,
-    createdAt: "2025-11-14",
-  },
-  {
-    id: "p_headlamp",
-    slug: "lowbeam-headlamp",
-    name: "Lowbeam Headlamp",
-    description:
-      "350 lumens, red-light mode that won't wreck your night vision, USB-C rechargeable. Runs 40 hours on low.",
-    price: 4200,
-    stock: 60,
-    featured: false,
-    categoryId: "cat_tools",
-    images: [{ url: "", altText: "Lowbeam Headlamp", isMain: true }],
-    variants: [{ id: "v1", label: "Standard", stock: 60, priceDiff: 0 }],
-    rating: 4.5,
-    reviewCount: 148,
-    createdAt: "2026-01-05",
-  },
-  {
-    id: "p_firekit",
-    slug: "dry-strike-fire-kit",
-    name: "Dry Strike Fire Kit",
-    description:
-      "Ferro rod, waxed tinder, and a striker in a waterproof case small enough to forget it's in your pack — until you need it.",
-    price: 2600,
-    stock: 71,
-    featured: false,
-    categoryId: "cat_tools",
-    images: [{ url: "", altText: "Dry Strike Fire Kit", isMain: true }],
-    variants: [{ id: "v1", label: "Standard", stock: 71, priceDiff: 0 }],
-    rating: 4.7,
-    reviewCount: 89,
-    createdAt: "2025-12-20",
-  },
-];
+type ProductWithRelations = Awaited<ReturnType<typeof prisma.product.findFirstOrThrow<{
+  include: { images: true; variants: true };
+}>>>;
 
-// Seeded so login works out of the box: demo@fieldnote.co / password123
-export const users: User[] = [
-  {
-    id: "u_demo",
-    email: "demo@fieldnote.co",
-    passwordHash: bcrypt.hashSync("password123", 10),
-    phone: "+15555550123",
-    name: "Demo Customer",
-    role: "CUSTOMER",
-    blocked: false,
-    createdAt: "2026-01-01",
-    loginCount: 0,
-  },
-  {
-    id: "u_admin",
-    email: "admin@fieldnote.co",
-    passwordHash: bcrypt.hashSync("admin123", 10),
-    name: "Store Admin",
-    role: "ADMIN",
-    blocked: false,
-    createdAt: "2026-01-01",
-    loginCount: 0,
-  },
-];
+function mapProduct(p: ProductWithRelations): Product {
+  return {
+    id: p.id,
+    slug: p.slug,
+    name: p.name,
+    description: p.description,
+    price: p.price,
+    comparePrice: toUndef(p.comparePrice),
+    stock: p.stock,
+    featured: p.featured,
+    categoryId: p.categoryId,
+    images: p.images.map((i) => ({ url: i.url, altText: i.altText, isMain: i.isMain })),
+    variants: p.variants.map((v) => ({
+      id: v.id,
+      label: v.label,
+      stock: v.stock,
+      priceDiff: v.priceDiff,
+    })),
+    rating: p.rating,
+    reviewCount: p.reviewCount,
+    createdAt: p.createdAt.toISOString(),
+    metaTitle: toUndef(p.metaTitle),
+    metaDescription: toUndef(p.metaDescription),
+  };
+}
 
-export const addresses: Address[] = [
-  {
-    id: "addr_demo",
-    userId: "u_demo",
-    fullName: "Demo Customer",
-    street: "142 Birchwood Ave",
-    city: "Portland",
-    state: "OR",
-    zip: "97205",
-    country: "USA",
-    isDefault: true,
-  },
-];
+function mapUser(u: {
+  id: string;
+  email: string | null;
+  passwordHash: string | null;
+  phone: string | null;
+  name: string;
+  role: Role;
+  blocked: boolean;
+  createdAt: Date;
+  lastLoginAt: Date | null;
+  loginCount: number;
+}): User {
+  return {
+    id: u.id,
+    email: toUndef(u.email),
+    passwordHash: toUndef(u.passwordHash),
+    phone: toUndef(u.phone),
+    name: u.name,
+    role: u.role,
+    blocked: u.blocked,
+    createdAt: u.createdAt.toISOString(),
+    lastLoginAt: u.lastLoginAt ? u.lastLoginAt.toISOString() : undefined,
+    loginCount: u.loginCount,
+  };
+}
 
-export const orders: Order[] = [
-  {
-    id: "ord_1001",
-    userId: "u_demo",
-    status: "SHIPPED",
-    subtotal: 24300,
-    discount: 0,
-    tax: 1944,
-    shipping: 0,
-    total: 26244,
-    shippingAddress: addresses[0],
-    trackingNumber: "1Z999AA10123456784",
-    items: [
-      { productId: "p_switchback", productName: "Switchback Hip Pack", variant: "Forest", quantity: 1, price: 5400 },
-      { productId: "p_multitool", productName: "Trailhand Multitool", quantity: 1, price: 6900 },
-      { productId: "p_headlamp", productName: "Lowbeam Headlamp", quantity: 3, price: 4200 },
-    ],
-    createdAt: "2026-07-28",
-  },
-];
-
-let orderSeq = 1002;
-
-export const wishlistItems: import("./types").WishlistItem[] = [];
-export const reviews: import("./types").Review[] = [
-  {
-    id: "rev_1",
-    userId: "u_demo",
-    userName: "Demo Customer",
-    productId: "p_ridge35",
-    rating: 5,
-    comment: "Carried this through a week in the Wallowas and the hip belt never dug in once. Worth the price.",
-    approved: true,
-    createdAt: "2026-07-02",
-  },
-  {
-    id: "rev_2",
-    userId: "u_demo",
-    userName: "Demo Customer",
-    productId: "p_multitool",
-    rating: 4,
-    comment: "Solid build, though the pliers are a little tight out of the box. Loosened up after a week of use.",
-    approved: true,
-    createdAt: "2026-06-18",
-  },
-  {
-    id: "rev_3",
-    userId: "u_demo",
-    userName: "Demo Customer",
-    productId: "p_stormshell",
-    rating: 3,
-    comment: "This is spam-flagged test content pending moderation review.",
-    approved: false,
-    createdAt: "2026-08-01",
-  },
-];
-
-interface ResetToken {
-  token: string;
+function mapAddress(a: {
+  id: string;
   userId: string;
-  expiresAt: number;
+  fullName: string;
+  street: string;
+  city: string;
+  state: string;
+  zip: string;
+  country: string;
+  isDefault: boolean;
+}): Address {
+  return { ...a };
 }
-export const resetTokens: ResetToken[] = [];
 
-interface OtpEntry {
-  phone: string;
-  code: string;
-  expiresAt: number;
-  attempts: number;
+type OrderWithRelations = Awaited<ReturnType<typeof prisma.order.findFirstOrThrow<{
+  include: { items: true; shippingAddress: true; billingAddress: true };
+}>>>;
+
+function mapOrder(o: OrderWithRelations): Order {
+  return {
+    id: o.id,
+    userId: o.userId,
+    status: o.status,
+    subtotal: o.subtotal,
+    discount: o.discount,
+    couponCode: toUndef(o.couponCode),
+    tax: o.tax,
+    shipping: o.shipping,
+    total: o.total,
+    shippingAddress: mapAddress(o.shippingAddress),
+    billingAddress: o.billingAddress ? mapAddress(o.billingAddress) : undefined,
+    trackingNumber: toUndef(o.trackingNumber),
+    adminNotes: toUndef(o.adminNotes),
+    items: o.items.map(
+      (i): OrderItem => ({
+        productId: i.productId,
+        productName: i.productName,
+        variant: toUndef(i.variant),
+        quantity: i.quantity,
+        price: i.price,
+      })
+    ),
+    createdAt: o.createdAt.toISOString(),
+  };
 }
-export const otpCodes: OtpEntry[] = [];
 
-export const notifications: Notification[] = [];
+function mapBlogPost(b: {
+  id: string;
+  slug: string;
+  title: string;
+  excerpt: string;
+  content: string;
+  coverImage: string | null;
+  published: boolean;
+  authorName: string;
+  metaTitle: string | null;
+  metaDescription: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}): BlogPost {
+  return {
+    id: b.id,
+    slug: b.slug,
+    title: b.title,
+    excerpt: b.excerpt,
+    content: b.content,
+    coverImage: toUndef(b.coverImage),
+    published: b.published,
+    authorName: b.authorName,
+    metaTitle: toUndef(b.metaTitle),
+    metaDescription: toUndef(b.metaDescription),
+    createdAt: b.createdAt.toISOString(),
+    updatedAt: b.updatedAt.toISOString(),
+  };
+}
 
-export const blogPosts: BlogPost[] = [
-  {
-    id: "blog_repair",
-    slug: "why-we-run-a-lifetime-repair-program",
-    title: "Why we run a lifetime repair program",
-    excerpt: "Warranties expire. Gear shouldn't have to.",
-    content:
-      "Most warranties are built around a countdown — a year, two years, then you're on your own. We decided early on that a good repair program should look nothing like that...",
-    published: true,
-    authorName: "Fieldnote Team",
-    metaTitle: "Why we run a lifetime repair program — Fieldnote",
-    metaDescription: "How Fieldnote's lifetime repair program works and why we built it instead of a standard warranty.",
-    createdAt: "2026-06-01",
-    updatedAt: "2026-06-01",
-  },
-  {
-    id: "blog_ripstop",
-    slug: "choosing-a-pack-fabric-that-lasts",
-    title: "Choosing a pack fabric that actually lasts",
-    excerpt: "Denier ratings, ripstop weaves, and what actually matters on trail.",
-    content:
-      "420D recycled ripstop shows up on a lot of spec sheets, ours included, but the number alone tells you less than you'd think...",
-    published: true,
-    authorName: "Fieldnote Team",
-    metaTitle: "Choosing a pack fabric that lasts — Fieldnote",
-    metaDescription: "What denier ratings and ripstop weaves actually tell you about pack durability.",
-    createdAt: "2026-05-10",
-    updatedAt: "2026-05-10",
-  },
-];
+function mapPage(p: {
+  id: string;
+  slug: string;
+  title: string;
+  content: string;
+  published: boolean;
+  metaTitle: string | null;
+  metaDescription: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}): Page {
+  return {
+    id: p.id,
+    slug: p.slug,
+    title: p.title,
+    content: p.content,
+    published: p.published,
+    metaTitle: toUndef(p.metaTitle),
+    metaDescription: toUndef(p.metaDescription),
+    createdAt: p.createdAt.toISOString(),
+    updatedAt: p.updatedAt.toISOString(),
+  };
+}
 
-export const pages: Page[] = [
-  {
-    id: "page_shipping",
-    slug: "shipping-info",
-    title: "Shipping Information",
-    content:
-      "We ship standard (3-5 days, free over $100) and express (1-2 days, $18 flat) across the US and Canada.",
-    published: true,
-    metaTitle: "Shipping Information — Fieldnote",
-    metaDescription: "Fieldnote shipping rates, timelines, and coverage.",
-    createdAt: "2026-01-15",
-    updatedAt: "2026-01-15",
-  },
-];
+function mapTaxRate(t: {
+  id: string;
+  label: string;
+  country: string;
+  region: string | null;
+  ratePercent: number;
+  active: boolean;
+}): TaxRate {
+  return { ...t, region: toUndef(t.region) };
+}
 
-export const taxRates: TaxRate[] = [
-  { id: "tax_or", label: "Oregon (no sales tax)", country: "USA", region: "OR", ratePercent: 0, active: true },
-  { id: "tax_ca", label: "California state tax", country: "USA", region: "CA", ratePercent: 7.25, active: true },
-  { id: "tax_default", label: "Default US rate", country: "USA", ratePercent: 8, active: true },
-];
+function mapStoreSettings(s: {
+  storeName: string;
+  supportEmail: string;
+  currency: string;
+  addressLine: string;
+  freeShippingThreshold: number;
+  flatShippingRate: number;
+  expressShippingRate: number;
+  defaultTaxPercent: number;
+  metaTitle: string;
+  metaDescription: string;
+  socialInstagram: string | null;
+  socialTwitter: string | null;
+  maintenanceMode: boolean;
+}): StoreSettings {
+  return {
+    ...s,
+    socialInstagram: toUndef(s.socialInstagram),
+    socialTwitter: toUndef(s.socialTwitter),
+  };
+}
 
-export const coupons: Coupon[] = [
-  { id: "cpn_welcome10", code: "WELCOME10", type: "percent", value: 10, usedCount: 3, active: true },
-  {
-    id: "cpn_save15",
-    code: "SAVE15",
-    type: "fixed",
-    value: 1500,
-    minSubtotal: 10000,
-    usedCount: 0,
-    active: true,
-  },
-  { id: "cpn_expired", code: "SUMMER24", type: "percent", value: 20, usedCount: 12, active: false },
-];
-
-export const storeSettings: StoreSettings = {
-  storeName: "Fieldnote",
-  supportEmail: "support@fieldnote.co",
-  currency: "USD",
-  addressLine: "142 Birchwood Ave, Portland, OR 97205",
-  freeShippingThreshold: 10000,
-  flatShippingRate: 700,
-  expressShippingRate: 1800,
-  defaultTaxPercent: 8,
-  metaTitle: "Fieldnote — Gear for the field",
-  metaDescription: "Packs, outerwear and tools built to be used hard and repaired, not replaced.",
-  socialInstagram: "",
-  socialTwitter: "",
-  maintenanceMode: false,
-};
+const productInclude = { images: true, variants: true } as const;
+const orderInclude = { items: true, shippingAddress: true, billingAddress: true } as const;
 
 // ---------------------------------------------------------------------------
 // Reads
 // ---------------------------------------------------------------------------
 
 export async function getCategories(): Promise<Category[]> {
-  return categories;
+  const rows = await prisma.category.findMany({ orderBy: { name: "asc" } });
+  return rows.map(mapCategory);
 }
 
 export async function getCategoryBySlug(slug: string) {
-  return categories.find((c) => c.slug === slug) ?? null;
+  const row = await prisma.category.findUnique({ where: { slug } });
+  return row ? mapCategory(row) : null;
 }
 
 export async function getCategoryById(id: string): Promise<Category | null> {
-  return categories.find((c) => c.id === id) ?? null;
+  const row = await prisma.category.findUnique({ where: { id } });
+  return row ? mapCategory(row) : null;
 }
 
 export async function getProducts(params?: {
@@ -416,90 +295,93 @@ export async function getProducts(params?: {
   maxPrice?: number;
   minRating?: number;
 }): Promise<Product[]> {
-  let list = [...products];
+  const where: Record<string, unknown> = {};
 
   if (params?.categorySlug) {
-    const cat = categories.find((c) => c.slug === params.categorySlug);
-    if (cat) list = list.filter((p) => p.categoryId === cat.id);
+    where.category = { slug: params.categorySlug };
   }
   if (params?.q) {
-    const q = params.q.toLowerCase();
-    list = list.filter(
-      (p) =>
-        p.name.toLowerCase().includes(q) ||
-        p.description.toLowerCase().includes(q)
-    );
+    where.OR = [
+      { name: { contains: params.q, mode: "insensitive" } },
+      { description: { contains: params.q, mode: "insensitive" } },
+    ];
   }
-  if (params?.minPrice != null) {
-    list = list.filter((p) => p.price >= params.minPrice!);
-  }
-  if (params?.maxPrice != null) {
-    list = list.filter((p) => p.price <= params.maxPrice!);
+  if (params?.minPrice != null || params?.maxPrice != null) {
+    where.price = {
+      ...(params.minPrice != null ? { gte: params.minPrice } : {}),
+      ...(params.maxPrice != null ? { lte: params.maxPrice } : {}),
+    };
   }
   if (params?.minRating != null) {
-    list = list.filter((p) => p.rating >= params.minRating!);
+    where.rating = { gte: params.minRating };
   }
 
-  switch (params?.sort) {
-    case "price-asc":
-      list.sort((a, b) => a.price - b.price);
-      break;
-    case "price-desc":
-      list.sort((a, b) => b.price - a.price);
-      break;
-    case "name":
-      list.sort((a, b) => a.name.localeCompare(b.name));
-      break;
-    default:
-      list.sort(
-        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-      );
-  }
+  const orderBy =
+    params?.sort === "price-asc"
+      ? { price: "asc" as const }
+      : params?.sort === "price-desc"
+        ? { price: "desc" as const }
+        : params?.sort === "name"
+          ? { name: "asc" as const }
+          : { createdAt: "desc" as const };
 
-  return list;
+  const rows = await prisma.product.findMany({ where, orderBy, include: productInclude });
+  return rows.map(mapProduct);
 }
 
 export async function getFeaturedProducts(): Promise<Product[]> {
-  return products.filter((p) => p.featured);
+  const rows = await prisma.product.findMany({
+    where: { featured: true },
+    include: productInclude,
+  });
+  return rows.map(mapProduct);
 }
 
 export async function getProductBySlug(slug: string): Promise<Product | null> {
-  return products.find((p) => p.slug === slug) ?? null;
+  const row = await prisma.product.findUnique({ where: { slug }, include: productInclude });
+  return row ? mapProduct(row) : null;
 }
 
 export async function getProductById(id: string): Promise<Product | null> {
-  return products.find((p) => p.id === id) ?? null;
+  const row = await prisma.product.findUnique({ where: { id }, include: productInclude });
+  return row ? mapProduct(row) : null;
 }
 
 export async function getRelatedProducts(product: Product): Promise<Product[]> {
-  return products
-    .filter((p) => p.categoryId === product.categoryId && p.id !== product.id)
-    .slice(0, 4);
+  const rows = await prisma.product.findMany({
+    where: { categoryId: product.categoryId, id: { not: product.id } },
+    take: 4,
+    include: productInclude,
+  });
+  return rows.map(mapProduct);
 }
 
 export async function getUserByEmail(email: string): Promise<User | null> {
-  return users.find((u) => u.email?.toLowerCase() === email.toLowerCase()) ?? null;
+  const row = await prisma.user.findFirst({
+    where: { email: { equals: email, mode: "insensitive" } },
+  });
+  return row ? mapUser(row) : null;
 }
 
 export async function getUserById(id: string): Promise<User | null> {
-  return users.find((u) => u.id === id) ?? null;
+  const row = await prisma.user.findUnique({ where: { id } });
+  return row ? mapUser(row) : null;
 }
 
 export async function getUserByPhone(phone: string): Promise<User | null> {
-  return users.find((u) => u.phone === phone) ?? null;
+  const row = await prisma.user.findUnique({ where: { phone } });
+  return row ? mapUser(row) : null;
 }
 
 export async function createUserByPhone(input: { phone: string; name?: string }): Promise<User> {
-  const user: User = {
-    id: `u_${Date.now()}`,
-    phone: input.phone,
-    name: input.name ?? "Fieldnote Member",
-    role: "CUSTOMER",
-    blocked: false,
-    createdAt: new Date().toISOString(),
-    loginCount: 0,
-  };
-  users.push(user);
+  const row = await prisma.user.create({
+    data: {
+      phone: input.phone,
+      name: input.name ?? "Fieldnote Member",
+      role: "CUSTOMER",
+    },
+  });
+  const user = mapUser(row);
   await createNotification({
     userId: user.id,
     type: "welcome",
@@ -510,53 +392,63 @@ export async function createUserByPhone(input: { phone: string; name?: string })
 }
 
 export async function recordLogin(userId: string): Promise<void> {
-  const user = users.find((u) => u.id === userId);
-  if (!user) return;
-  user.lastLoginAt = new Date().toISOString();
-  user.loginCount = (user.loginCount ?? 0) + 1;
+  try {
+    await prisma.user.update({
+      where: { id: userId },
+      data: { lastLoginAt: new Date(), loginCount: { increment: 1 } },
+    });
+  } catch {
+    // Swallow — login recording should never block the auth flow itself.
+  }
 }
 
 export async function updateUserProfile(
   id: string,
   patch: { name?: string; email?: string; phone?: string }
 ): Promise<User | null> {
-  const user = users.find((u) => u.id === id);
-  if (!user) return null;
-  if (patch.email && patch.email.toLowerCase() !== user.email?.toLowerCase()) {
+  if (patch.email) {
     const existing = await getUserByEmail(patch.email);
     if (existing && existing.id !== id) {
       throw new Error("That email is already in use.");
     }
-    user.email = patch.email;
   }
-  if (patch.phone && patch.phone !== user.phone) {
+  if (patch.phone) {
     const existing = await getUserByPhone(patch.phone);
     if (existing && existing.id !== id) {
       throw new Error("That phone number is already in use.");
     }
-    user.phone = patch.phone;
   }
-  if (patch.name) user.name = patch.name;
-  return user;
+  try {
+    const row = await prisma.user.update({
+      where: { id },
+      data: {
+        ...(patch.name ? { name: patch.name } : {}),
+        ...(patch.email ? { email: patch.email } : {}),
+        ...(patch.phone ? { phone: patch.phone } : {}),
+      },
+    });
+    return mapUser(row);
+  } catch {
+    return null;
+  }
 }
 
 export async function getAddressesForUser(userId: string): Promise<Address[]> {
-  return addresses.filter((a) => a.userId === userId);
+  const rows = await prisma.address.findMany({ where: { userId } });
+  return rows.map(mapAddress);
 }
 
 export async function getAddressById(id: string): Promise<Address | null> {
-  return addresses.find((a) => a.id === id) ?? null;
+  const row = await prisma.address.findUnique({ where: { id } });
+  return row ? mapAddress(row) : null;
 }
 
 export async function createAddress(input: Omit<Address, "id">): Promise<Address> {
   if (input.isDefault) {
-    for (const a of addresses) {
-      if (a.userId === input.userId) a.isDefault = false;
-    }
+    await prisma.address.updateMany({ where: { userId: input.userId }, data: { isDefault: false } });
   }
-  const address: Address = { id: `addr_${Date.now()}`, ...input };
-  addresses.push(address);
-  return address;
+  const row = await prisma.address.create({ data: input });
+  return mapAddress(row);
 }
 
 export async function updateAddress(
@@ -564,61 +456,71 @@ export async function updateAddress(
   userId: string,
   patch: Partial<Omit<Address, "id" | "userId">>
 ): Promise<Address | null> {
-  const address = addresses.find((a) => a.id === id && a.userId === userId);
-  if (!address) return null;
+  const existing = await prisma.address.findFirst({ where: { id, userId } });
+  if (!existing) return null;
   if (patch.isDefault) {
-    for (const a of addresses) {
-      if (a.userId === userId) a.isDefault = false;
-    }
+    await prisma.address.updateMany({ where: { userId }, data: { isDefault: false } });
   }
-  Object.assign(address, patch);
-  return address;
+  const row = await prisma.address.update({ where: { id }, data: patch });
+  return mapAddress(row);
 }
 
 export async function deleteAddress(id: string, userId: string): Promise<boolean> {
-  const idx = addresses.findIndex((a) => a.id === id && a.userId === userId);
-  if (idx === -1) return false;
-  addresses.splice(idx, 1);
+  const existing = await prisma.address.findFirst({ where: { id, userId } });
+  if (!existing) return false;
+  await prisma.address.delete({ where: { id } });
   return true;
 }
 
 export async function getOrdersForUser(userId: string): Promise<Order[]> {
-  return orders
-    .filter((o) => o.userId === userId)
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  const rows = await prisma.order.findMany({
+    where: { userId },
+    orderBy: { createdAt: "desc" },
+    include: orderInclude,
+  });
+  return rows.map(mapOrder);
 }
 
 export async function getOrderById(id: string): Promise<Order | null> {
-  return orders.find((o) => o.id === id) ?? null;
+  const row = await prisma.order.findUnique({ where: { id }, include: orderInclude });
+  return row ? mapOrder(row) : null;
 }
 
 export async function getAllOrders(): Promise<Order[]> {
-  return [...orders].sort(
-    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-  );
+  const rows = await prisma.order.findMany({
+    orderBy: { createdAt: "desc" },
+    include: orderInclude,
+  });
+  return rows.map(mapOrder);
 }
 
 export async function getAllUsers(): Promise<User[]> {
-  return users;
+  const rows = await prisma.user.findMany();
+  return rows.map(mapUser);
 }
 
 export async function getDashboardStats() {
-  const totalRevenue = orders.reduce((sum, o) => sum + o.total, 0);
-  const pendingOrders = orders.filter((o) => o.status === "PENDING").length;
-  const lowStock = products.filter((p) => p.stock > 0 && p.stock <= 15);
-  const outOfStock = products.filter((p) => p.stock === 0);
-  const pendingReviews = reviews.filter((r) => !r.approved).length;
+  const [totalRevenueAgg, pendingOrders, totalOrders, totalCustomers, lowStockRows, outOfStockRows, pendingReviews, recentOrderRows] =
+    await Promise.all([
+      prisma.order.aggregate({ _sum: { total: true } }),
+      prisma.order.count({ where: { status: "PENDING" } }),
+      prisma.order.count(),
+      prisma.user.count({ where: { role: "CUSTOMER" } }),
+      prisma.product.findMany({ where: { stock: { gt: 0, lte: 15 } }, include: productInclude }),
+      prisma.product.findMany({ where: { stock: 0 }, include: productInclude }),
+      prisma.review.count({ where: { approved: false } }),
+      prisma.order.findMany({ orderBy: { createdAt: "desc" }, take: 5, include: orderInclude }),
+    ]);
+
   return {
-    totalRevenue,
-    totalOrders: orders.length,
+    totalRevenue: totalRevenueAgg._sum.total ?? 0,
+    totalOrders,
     pendingOrders,
-    totalCustomers: users.filter((u) => u.role === "CUSTOMER").length,
-    lowStock,
-    outOfStock,
+    totalCustomers,
+    lowStock: lowStockRows.map(mapProduct),
+    outOfStock: outOfStockRows.map(mapProduct),
     pendingReviews,
-    recentOrders: [...orders]
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-      .slice(0, 5),
+    recentOrders: recentOrderRows.map(mapOrder),
   };
 }
 
@@ -630,18 +532,15 @@ export async function createUser(input: { email: string; password: string; name:
   const existing = await getUserByEmail(input.email);
   if (existing) throw new Error("An account with this email already exists.");
 
-  const user: User = {
-    id: `u_${Date.now()}`,
-    email: input.email,
-    passwordHash: bcrypt.hashSync(input.password, 10),
-    name: input.name,
-    role: "CUSTOMER",
-    blocked: false,
-    createdAt: new Date().toISOString(),
-    loginCount: 0,
-  };
-  users.push(user);
-  return user;
+  const row = await prisma.user.create({
+    data: {
+      email: input.email,
+      passwordHash: bcrypt.hashSync(input.password, 10),
+      name: input.name,
+      role: "CUSTOMER",
+    },
+  });
+  return mapUser(row);
 }
 
 export async function verifyPassword(user: User, password: string): Promise<boolean> {
@@ -662,32 +561,83 @@ export async function createOrder(input: {
   const discountedSubtotal = subtotal - discount;
   const shipping = discountedSubtotal > 10000 ? 0 : 700;
   const tax = Math.round(discountedSubtotal * 0.08);
-  const order: Order = {
-    id: `ord_${orderSeq++}`,
-    userId: input.userId,
-    status: "PENDING",
-    subtotal,
-    discount,
-    couponCode: input.couponCode,
-    tax,
-    shipping,
-    total: discountedSubtotal + tax + shipping,
-    shippingAddress: input.shippingAddress,
-    billingAddress: input.billingAddress,
-    items: input.items,
-    createdAt: new Date().toISOString(),
-  };
-  orders.unshift(order);
 
-  if (input.couponCode) await incrementCouponUse(input.couponCode);
+  const order = await prisma.$transaction(async (tx) => {
+    // shippingAddress passed in has a client-generated id that doesn't
+    // exist in the DB yet — create it for real first.
+    const address = await tx.address.create({
+      data: {
+        userId: input.shippingAddress.userId,
+        fullName: input.shippingAddress.fullName,
+        street: input.shippingAddress.street,
+        city: input.shippingAddress.city,
+        state: input.shippingAddress.state,
+        zip: input.shippingAddress.zip,
+        country: input.shippingAddress.country,
+        isDefault: false,
+      },
+    });
 
-  // decrement stock
-  for (const item of input.items) {
-    const p = products.find((p) => p.id === item.productId);
-    if (p) p.stock = Math.max(0, p.stock - item.quantity);
-  }
+    let billingAddressId: string | undefined;
+    if (input.billingAddress) {
+      const billing = await tx.address.create({
+        data: {
+          userId: input.billingAddress.userId,
+          fullName: input.billingAddress.fullName,
+          street: input.billingAddress.street,
+          city: input.billingAddress.city,
+          state: input.billingAddress.state,
+          zip: input.billingAddress.zip,
+          country: input.billingAddress.country,
+          isDefault: false,
+        },
+      });
+      billingAddressId = billing.id;
+    }
 
-  return order;
+    const created = await tx.order.create({
+      data: {
+        userId: input.userId,
+        status: "PENDING",
+        subtotal,
+        discount,
+        couponCode: input.couponCode,
+        tax,
+        shipping,
+        total: discountedSubtotal + tax + shipping,
+        shippingAddressId: address.id,
+        billingAddressId,
+        items: {
+          create: input.items.map((i) => ({
+            productId: i.productId,
+            productName: i.productName,
+            variant: i.variant,
+            quantity: i.quantity,
+            price: i.price,
+          })),
+        },
+      },
+      include: orderInclude,
+    });
+
+    for (const item of input.items) {
+      await tx.product.updateMany({
+        where: { id: item.productId, stock: { gte: item.quantity } },
+        data: { stock: { decrement: item.quantity } },
+      });
+    }
+
+    if (input.couponCode) {
+      await tx.coupon.updateMany({
+        where: { code: input.couponCode },
+        data: { usedCount: { increment: 1 } },
+      });
+    }
+
+    return created;
+  });
+
+  return mapOrder(order);
 }
 
 export async function updateOrderStatus(
@@ -695,28 +645,45 @@ export async function updateOrderStatus(
   status: OrderStatus,
   trackingNumber?: string
 ): Promise<Order | null> {
-  const order = orders.find((o) => o.id === orderId);
-  if (!order) return null;
-  order.status = status;
-  if (trackingNumber) order.trackingNumber = trackingNumber;
-  return order;
+  try {
+    const row = await prisma.order.update({
+      where: { id: orderId },
+      data: { status, ...(trackingNumber ? { trackingNumber } : {}) },
+      include: orderInclude,
+    });
+    return mapOrder(row);
+  } catch {
+    return null;
+  }
 }
 
 export async function updateOrderNotes(orderId: string, notes: string): Promise<Order | null> {
-  const order = orders.find((o) => o.id === orderId);
-  if (!order) return null;
-  order.adminNotes = notes;
-  return order;
+  try {
+    const row = await prisma.order.update({
+      where: { id: orderId },
+      data: { adminNotes: notes },
+      include: orderInclude,
+    });
+    return mapOrder(row);
+  } catch {
+    return null;
+  }
 }
 
 export async function updateOrderTracking(
   orderId: string,
   trackingNumber: string
 ): Promise<Order | null> {
-  const order = orders.find((o) => o.id === orderId);
-  if (!order) return null;
-  order.trackingNumber = trackingNumber;
-  return order;
+  try {
+    const row = await prisma.order.update({
+      where: { id: orderId },
+      data: { trackingNumber },
+      include: orderInclude,
+    });
+    return mapOrder(row);
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -729,37 +696,35 @@ export async function createCategory(input: {
   metaTitle?: string;
   metaDescription?: string;
 }): Promise<Category> {
-  const category: Category = {
-    id: `cat_${Date.now()}`,
-    name: input.name,
-    slug: slugify(input.name),
-    description: input.description,
-    metaTitle: input.metaTitle,
-    metaDescription: input.metaDescription,
-  };
-  categories.push(category);
-  return category;
+  const row = await prisma.category.create({
+    data: { ...input, slug: slugify(input.name) },
+  });
+  return mapCategory(row);
 }
 
 export async function updateCategory(
   id: string,
   patch: Partial<Omit<Category, "id">>
 ): Promise<Category | null> {
-  const category = categories.find((c) => c.id === id);
-  if (!category) return null;
-  Object.assign(category, patch);
-  return category;
+  try {
+    const row = await prisma.category.update({ where: { id }, data: patch });
+    return mapCategory(row);
+  } catch {
+    return null;
+  }
 }
 
 export async function deleteCategory(id: string): Promise<{ success: boolean; message?: string }> {
-  const inUse = products.some((p) => p.categoryId === id);
-  if (inUse) {
+  const inUse = await prisma.product.count({ where: { categoryId: id } });
+  if (inUse > 0) {
     return { success: false, message: "Move or delete products in this category first." };
   }
-  const idx = categories.findIndex((c) => c.id === id);
-  if (idx === -1) return { success: false, message: "Category not found." };
-  categories.splice(idx, 1);
-  return { success: true };
+  try {
+    await prisma.category.delete({ where: { id } });
+    return { success: true };
+  } catch {
+    return { success: false, message: "Category not found." };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -767,17 +732,21 @@ export async function deleteCategory(id: string): Promise<{ success: boolean; me
 // ---------------------------------------------------------------------------
 
 export async function setUserBlocked(userId: string, blocked: boolean): Promise<User | null> {
-  const user = users.find((u) => u.id === userId);
-  if (!user) return null;
-  user.blocked = blocked;
-  return user;
+  try {
+    const row = await prisma.user.update({ where: { id: userId }, data: { blocked } });
+    return mapUser(row);
+  } catch {
+    return null;
+  }
 }
 
 export async function setUserRole(userId: string, role: Role): Promise<User | null> {
-  const user = users.find((u) => u.id === userId);
-  if (!user) return null;
-  user.role = role;
-  return user;
+  try {
+    const row = await prisma.user.update({ where: { id: userId }, data: { role } });
+    return mapUser(row);
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -785,17 +754,21 @@ export async function setUserRole(userId: string, role: Role): Promise<User | nu
 // ---------------------------------------------------------------------------
 
 export async function getBlogPosts(params?: { publishedOnly?: boolean }): Promise<BlogPost[]> {
-  let list = [...blogPosts];
-  if (params?.publishedOnly) list = list.filter((p) => p.published);
-  return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  const rows = await prisma.blogPost.findMany({
+    where: params?.publishedOnly ? { published: true } : undefined,
+    orderBy: { createdAt: "desc" },
+  });
+  return rows.map(mapBlogPost);
 }
 
 export async function getBlogPostBySlug(slug: string): Promise<BlogPost | null> {
-  return blogPosts.find((p) => p.slug === slug) ?? null;
+  const row = await prisma.blogPost.findUnique({ where: { slug } });
+  return row ? mapBlogPost(row) : null;
 }
 
 export async function getBlogPostById(id: string): Promise<BlogPost | null> {
-  return blogPosts.find((p) => p.id === id) ?? null;
+  const row = await prisma.blogPost.findUnique({ where: { id } });
+  return row ? mapBlogPost(row) : null;
 }
 
 export async function createBlogPost(input: {
@@ -807,39 +780,31 @@ export async function createBlogPost(input: {
   metaTitle?: string;
   metaDescription?: string;
 }): Promise<BlogPost> {
-  const now = new Date().toISOString();
-  const post: BlogPost = {
-    id: `blog_${Date.now()}`,
-    slug: slugify(input.title),
-    title: input.title,
-    excerpt: input.excerpt,
-    content: input.content,
-    authorName: input.authorName,
-    published: input.published,
-    metaTitle: input.metaTitle,
-    metaDescription: input.metaDescription,
-    createdAt: now,
-    updatedAt: now,
-  };
-  blogPosts.unshift(post);
-  return post;
+  const row = await prisma.blogPost.create({
+    data: { ...input, slug: slugify(input.title) },
+  });
+  return mapBlogPost(row);
 }
 
 export async function updateBlogPost(
   id: string,
   patch: Partial<Omit<BlogPost, "id" | "createdAt">>
 ): Promise<BlogPost | null> {
-  const post = blogPosts.find((p) => p.id === id);
-  if (!post) return null;
-  Object.assign(post, patch, { updatedAt: new Date().toISOString() });
-  return post;
+  try {
+    const row = await prisma.blogPost.update({ where: { id }, data: patch });
+    return mapBlogPost(row);
+  } catch {
+    return null;
+  }
 }
 
 export async function deleteBlogPost(id: string): Promise<boolean> {
-  const idx = blogPosts.findIndex((p) => p.id === id);
-  if (idx === -1) return false;
-  blogPosts.splice(idx, 1);
-  return true;
+  try {
+    await prisma.blogPost.delete({ where: { id } });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -847,17 +812,21 @@ export async function deleteBlogPost(id: string): Promise<boolean> {
 // ---------------------------------------------------------------------------
 
 export async function getPages(params?: { publishedOnly?: boolean }): Promise<Page[]> {
-  let list = [...pages];
-  if (params?.publishedOnly) list = list.filter((p) => p.published);
-  return list.sort((a, b) => a.title.localeCompare(b.title));
+  const rows = await prisma.page.findMany({
+    where: params?.publishedOnly ? { published: true } : undefined,
+    orderBy: { title: "asc" },
+  });
+  return rows.map(mapPage);
 }
 
 export async function getPageBySlug(slug: string): Promise<Page | null> {
-  return pages.find((p) => p.slug === slug) ?? null;
+  const row = await prisma.page.findUnique({ where: { slug } });
+  return row ? mapPage(row) : null;
 }
 
 export async function getPageById(id: string): Promise<Page | null> {
-  return pages.find((p) => p.id === id) ?? null;
+  const row = await prisma.page.findUnique({ where: { id } });
+  return row ? mapPage(row) : null;
 }
 
 export async function createPage(input: {
@@ -867,37 +836,29 @@ export async function createPage(input: {
   metaTitle?: string;
   metaDescription?: string;
 }): Promise<Page> {
-  const now = new Date().toISOString();
-  const page: Page = {
-    id: `page_${Date.now()}`,
-    slug: slugify(input.title),
-    title: input.title,
-    content: input.content,
-    published: input.published,
-    metaTitle: input.metaTitle,
-    metaDescription: input.metaDescription,
-    createdAt: now,
-    updatedAt: now,
-  };
-  pages.push(page);
-  return page;
+  const row = await prisma.page.create({ data: { ...input, slug: slugify(input.title) } });
+  return mapPage(row);
 }
 
 export async function updatePage(
   id: string,
   patch: Partial<Omit<Page, "id" | "createdAt">>
 ): Promise<Page | null> {
-  const page = pages.find((p) => p.id === id);
-  if (!page) return null;
-  Object.assign(page, patch, { updatedAt: new Date().toISOString() });
-  return page;
+  try {
+    const row = await prisma.page.update({ where: { id }, data: patch });
+    return mapPage(row);
+  } catch {
+    return null;
+  }
 }
 
 export async function deletePage(id: string): Promise<boolean> {
-  const idx = pages.findIndex((p) => p.id === id);
-  if (idx === -1) return false;
-  pages.splice(idx, 1);
-  return true;
+  try {
+    await prisma.page.delete({ where: { id } });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -905,46 +866,81 @@ export async function deletePage(id: string): Promise<boolean> {
 // ---------------------------------------------------------------------------
 
 export async function getTaxRates(): Promise<TaxRate[]> {
-  return taxRates;
+  const rows = await prisma.taxRate.findMany({ orderBy: { label: "asc" } });
+  return rows.map(mapTaxRate);
 }
 
 export async function createTaxRate(input: Omit<TaxRate, "id">): Promise<TaxRate> {
-  const rate: TaxRate = { ...input, id: `tax_${Date.now()}` };
-  taxRates.push(rate);
-  return rate;
+  const row = await prisma.taxRate.create({ data: input });
+  return mapTaxRate(row);
 }
 
-export async function updateTaxRate(id: string, patch: Partial<Omit<TaxRate, "id">>): Promise<TaxRate | null> {
-  const rate = taxRates.find((r) => r.id === id);
-  if (!rate) return null;
-  Object.assign(rate, patch);
-  return rate;
+export async function updateTaxRate(
+  id: string,
+  patch: Partial<Omit<TaxRate, "id">>
+): Promise<TaxRate | null> {
+  try {
+    const row = await prisma.taxRate.update({ where: { id }, data: patch });
+    return mapTaxRate(row);
+  } catch {
+    return null;
+  }
 }
 
 export async function deleteTaxRate(id: string): Promise<boolean> {
-  const idx = taxRates.findIndex((r) => r.id === id);
-  if (idx === -1) return false;
-  taxRates.splice(idx, 1);
-  return true;
+  try {
+    await prisma.taxRate.delete({ where: { id } });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Coupons
 // ---------------------------------------------------------------------------
 
+function mapCoupon(c: {
+  id: string;
+  code: string;
+  type: string;
+  value: number;
+  minSubtotal: number | null;
+  maxUses: number | null;
+  usedCount: number;
+  active: boolean;
+  expiresAt: Date | null;
+}): Coupon {
+  return {
+    id: c.id,
+    code: c.code,
+    type: c.type as Coupon["type"],
+    value: c.value,
+    minSubtotal: toUndef(c.minSubtotal),
+    maxUses: toUndef(c.maxUses),
+    usedCount: c.usedCount,
+    active: c.active,
+    expiresAt: c.expiresAt ? c.expiresAt.toISOString() : undefined,
+  };
+}
+
 export async function getCoupons(): Promise<Coupon[]> {
-  return [...coupons].sort((a, b) => a.code.localeCompare(b.code));
+  const rows = await prisma.coupon.findMany({ orderBy: { code: "asc" } });
+  return rows.map(mapCoupon);
 }
 
 export async function getCouponByCode(code: string): Promise<Coupon | null> {
-  return coupons.find((c) => c.code.toLowerCase() === code.trim().toLowerCase()) ?? null;
+  const row = await prisma.coupon.findFirst({
+    where: { code: { equals: code.trim(), mode: "insensitive" } },
+  });
+  return row ? mapCoupon(row) : null;
 }
 
 export interface CouponValidationResult {
   valid: boolean;
   message?: string;
   coupon?: Coupon;
-  discount?: number; // cents
+  discount?: number;
 }
 
 export async function validateCoupon(code: string, subtotal: number): Promise<CouponValidationResult> {
@@ -973,201 +969,118 @@ export async function validateCoupon(code: string, subtotal: number): Promise<Co
 }
 
 export async function incrementCouponUse(code: string): Promise<void> {
-  const coupon = await getCouponByCode(code);
-  if (coupon) coupon.usedCount += 1;
+  await prisma.coupon.updateMany({
+    where: { code: { equals: code.trim(), mode: "insensitive" } },
+    data: { usedCount: { increment: 1 } },
+  });
 }
 
 export async function createCoupon(input: Omit<Coupon, "id" | "usedCount">): Promise<Coupon> {
-  const coupon: Coupon = { ...input, id: `cpn_${Date.now()}`, usedCount: 0 };
-  coupons.push(coupon);
-  return coupon;
+  const row = await prisma.coupon.create({
+    data: {
+      code: input.code,
+      type: input.type,
+      value: input.value,
+      minSubtotal: input.minSubtotal,
+      maxUses: input.maxUses,
+      active: input.active,
+      expiresAt: input.expiresAt ? new Date(input.expiresAt) : undefined,
+    },
+  });
+  return mapCoupon(row);
 }
 
 export async function updateCoupon(
   id: string,
   patch: Partial<Omit<Coupon, "id">>
 ): Promise<Coupon | null> {
-  const coupon = coupons.find((c) => c.id === id);
-  if (!coupon) return null;
-  Object.assign(coupon, patch);
-  return coupon;
+  try {
+    const row = await prisma.coupon.update({
+      where: { id },
+      data: {
+        ...patch,
+        expiresAt: patch.expiresAt ? new Date(patch.expiresAt) : undefined,
+      },
+    });
+    return mapCoupon(row);
+  } catch {
+    return null;
+  }
 }
 
 export async function deleteCoupon(id: string): Promise<boolean> {
-  const idx = coupons.findIndex((c) => c.id === id);
-  if (idx === -1) return false;
-  coupons.splice(idx, 1);
-  return true;
-}
-
-// ---------------------------------------------------------------------------
-// Store settings
-// ---------------------------------------------------------------------------
-
-export async function getStoreSettings(): Promise<StoreSettings> {
-  return storeSettings;
-}
-
-export async function updateStoreSettings(patch: Partial<StoreSettings>): Promise<StoreSettings> {
-  Object.assign(storeSettings, patch);
-  return storeSettings;
-}
-
-export async function createProduct(input: Omit<Product, "id" | "rating" | "reviewCount" | "createdAt">): Promise<Product> {
-  const product: Product = {
-    ...input,
-    id: `p_${Date.now()}`,
-    rating: 0,
-    reviewCount: 0,
-    createdAt: new Date().toISOString(),
-  };
-  products.unshift(product);
-  return product;
-}
-
-export async function updateProduct(id: string, patch: Partial<Product>): Promise<Product | null> {
-  const product = products.find((p) => p.id === id);
-  if (!product) return null;
-  Object.assign(product, patch);
-  return product;
-}
-
-export async function deleteProduct(id: string): Promise<boolean> {
-  const idx = products.findIndex((p) => p.id === id);
-  if (idx === -1) return false;
-  products.splice(idx, 1);
-  return true;
-}
-
-// ---------------------------------------------------------------------------
-// Wishlist
-// ---------------------------------------------------------------------------
-
-export async function getWishlistForUser(userId: string): Promise<Product[]> {
-  const ids = wishlistItems.filter((w) => w.userId === userId).map((w) => w.productId);
-  return products.filter((p) => ids.includes(p.id));
-}
-
-export async function isInWishlist(userId: string, productId: string): Promise<boolean> {
-  return wishlistItems.some((w) => w.userId === userId && w.productId === productId);
-}
-
-export async function toggleWishlist(
-  userId: string,
-  productId: string
-): Promise<{ inWishlist: boolean }> {
-  const existing = wishlistItems.findIndex(
-    (w) => w.userId === userId && w.productId === productId
-  );
-  if (existing !== -1) {
-    wishlistItems.splice(existing, 1);
-    return { inWishlist: false };
+  try {
+    await prisma.coupon.delete({ where: { id } });
+    return true;
+  } catch {
+    return false;
   }
-  wishlistItems.push({
-    id: `wl_${Date.now()}`,
-    userId,
-    productId,
-    createdAt: new Date().toISOString(),
-  });
-  return { inWishlist: true };
 }
 
 // ---------------------------------------------------------------------------
-// Reviews
+// Notifications
 // ---------------------------------------------------------------------------
 
-export async function getReviewsForProduct(productId: string) {
-  return reviews
-    .filter((r) => r.productId === productId && r.approved)
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-}
-
-export async function createReview(input: {
+function mapNotification(n: {
+  id: string;
   userId: string;
-  userName: string;
-  productId: string;
-  rating: number;
-  comment: string;
-}) {
-  const review = {
-    id: `rev_${Date.now()}`,
-    approved: true,
-    createdAt: new Date().toISOString(),
-    ...input,
+  type: string;
+  title: string;
+  message: string;
+  link: string | null;
+  read: boolean;
+  createdAt: Date;
+}): Notification {
+  return {
+    id: n.id,
+    userId: n.userId,
+    type: n.type as Notification["type"],
+    title: n.title,
+    message: n.message,
+    link: toUndef(n.link),
+    read: n.read,
+    createdAt: n.createdAt.toISOString(),
   };
-  reviews.unshift(review);
-
-  const product = products.find((p) => p.id === input.productId);
-  if (product) {
-    const productReviews = reviews.filter((r) => r.productId === product.id && r.approved);
-    product.reviewCount = productReviews.length;
-    product.rating =
-      productReviews.reduce((sum, r) => sum + r.rating, 0) / productReviews.length;
-  }
-
-  return review;
 }
 
-export async function hasUserReviewed(userId: string, productId: string): Promise<boolean> {
-  return reviews.some((r) => r.userId === userId && r.productId === productId);
+export async function createNotification(input: {
+  userId: string;
+  type: Notification["type"];
+  title: string;
+  message: string;
+  link?: string;
+}): Promise<Notification> {
+  const row = await prisma.notification.create({ data: input });
+  return mapNotification(row);
 }
 
-export async function getAllReviews() {
-  return [...reviews].sort(
-    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-  );
+export async function getNotificationsForUser(userId: string): Promise<Notification[]> {
+  const rows = await prisma.notification.findMany({
+    where: { userId },
+    orderBy: { createdAt: "desc" },
+    take: 50,
+  });
+  return rows.map(mapNotification);
 }
 
-function recalcProductRating(productId: string) {
-  const product = products.find((p) => p.id === productId);
-  if (!product) return;
-  const productReviews = reviews.filter((r) => r.productId === productId && r.approved);
-  product.reviewCount = productReviews.length;
-  product.rating = productReviews.length
-    ? productReviews.reduce((sum, r) => sum + r.rating, 0) / productReviews.length
-    : 0;
+export async function getUnreadNotificationCount(userId: string): Promise<number> {
+  return prisma.notification.count({ where: { userId, read: false } });
 }
 
-export async function setReviewApproved(reviewId: string, approved: boolean) {
-  const review = reviews.find((r) => r.id === reviewId);
-  if (!review) return null;
-  review.approved = approved;
-  recalcProductRating(review.productId);
-  return review;
+export async function markNotificationRead(id: string, userId: string): Promise<boolean> {
+  const result = await prisma.notification.updateMany({
+    where: { id, userId },
+    data: { read: true },
+  });
+  return result.count > 0;
 }
 
-export async function deleteReview(reviewId: string): Promise<boolean> {
-  const idx = reviews.findIndex((r) => r.id === reviewId);
-  if (idx === -1) return false;
-  const [removed] = reviews.splice(idx, 1);
-  recalcProductRating(removed.productId);
-  return true;
-}
-
-// ---------------------------------------------------------------------------
-// Password reset
-// ---------------------------------------------------------------------------
-
-export async function createResetToken(userId: string): Promise<string> {
-  const token = `${userId}.${Date.now()}.${Math.random().toString(36).slice(2)}`;
-  resetTokens.push({ token, userId, expiresAt: Date.now() + 60 * 60 * 1000 });
-  return token;
-}
-
-export async function consumeResetToken(token: string): Promise<string | null> {
-  const idx = resetTokens.findIndex((t) => t.token === token);
-  if (idx === -1) return null;
-  const entry = resetTokens[idx];
-  resetTokens.splice(idx, 1);
-  if (entry.expiresAt < Date.now()) return null;
-  return entry.userId;
-}
-
-export async function setUserPassword(userId: string, newPassword: string): Promise<boolean> {
-  const user = users.find((u) => u.id === userId);
-  if (!user) return false;
-  user.passwordHash = bcrypt.hashSync(newPassword, 10);
-  return true;
+export async function markAllNotificationsRead(userId: string): Promise<number> {
+  const result = await prisma.notification.updateMany({
+    where: { userId, read: false },
+    data: { read: true },
+  });
+  return result.count;
 }
 
 // ---------------------------------------------------------------------------
@@ -1180,78 +1093,264 @@ function generateOtpCode(): string {
 
 export async function issueOtp(phone: string): Promise<string> {
   const code = generateOtpCode();
-  // Replace any outstanding code for this phone rather than stacking them.
-  const idx = otpCodes.findIndex((o) => o.phone === phone);
-  const entry = { phone, code, expiresAt: Date.now() + 10 * 60 * 1000, attempts: 0 };
-  if (idx >= 0) otpCodes[idx] = entry;
-  else otpCodes.push(entry);
+  await prisma.otpCode.upsert({
+    where: { phone },
+    update: { code, expiresAt: new Date(Date.now() + 10 * 60 * 1000), attempts: 0 },
+    create: { phone, code, expiresAt: new Date(Date.now() + 10 * 60 * 1000), attempts: 0 },
+  });
   return code;
 }
 
 export async function verifyOtp(phone: string, code: string): Promise<boolean> {
-  const entry = otpCodes.find((o) => o.phone === phone);
+  const entry = await prisma.otpCode.findUnique({ where: { phone } });
   if (!entry) return false;
-  if (entry.expiresAt < Date.now()) {
-    otpCodes.splice(otpCodes.indexOf(entry), 1);
+  if (entry.expiresAt.getTime() < Date.now()) {
+    await prisma.otpCode.delete({ where: { phone } }).catch(() => {});
     return false;
   }
-  entry.attempts += 1;
-  if (entry.attempts > 5) {
-    otpCodes.splice(otpCodes.indexOf(entry), 1);
+  if (entry.attempts >= 5) {
+    await prisma.otpCode.delete({ where: { phone } }).catch(() => {});
     return false;
   }
+  await prisma.otpCode.update({ where: { phone }, data: { attempts: { increment: 1 } } });
+
   const valid = entry.code === code;
-  if (valid) otpCodes.splice(otpCodes.indexOf(entry), 1);
+  if (valid) await prisma.otpCode.delete({ where: { phone } }).catch(() => {});
   return valid;
 }
 
 // ---------------------------------------------------------------------------
-// Notifications
+// Store settings (single row, id = "default")
 // ---------------------------------------------------------------------------
 
-export async function createNotification(input: {
-  userId: string;
-  type: Notification["type"];
-  title: string;
-  message: string;
-  link?: string;
-}): Promise<Notification> {
-  const notification: Notification = {
-    id: `notif_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-    userId: input.userId,
-    type: input.type,
-    title: input.title,
-    message: input.message,
-    link: input.link,
-    read: false,
-    createdAt: new Date().toISOString(),
-  };
-  notifications.unshift(notification);
-  return notification;
+export async function getStoreSettings(): Promise<StoreSettings> {
+  const row = await prisma.storeSettings.upsert({
+    where: { id: "default" },
+    update: {},
+    create: { id: "default" },
+  });
+  return mapStoreSettings(row);
 }
 
-export async function getNotificationsForUser(userId: string): Promise<Notification[]> {
-  return notifications.filter((n) => n.userId === userId).slice(0, 50);
+export async function updateStoreSettings(patch: Partial<StoreSettings>): Promise<StoreSettings> {
+  const row = await prisma.storeSettings.upsert({
+    where: { id: "default" },
+    update: patch,
+    create: { id: "default", ...patch },
+  });
+  return mapStoreSettings(row);
 }
 
-export async function getUnreadNotificationCount(userId: string): Promise<number> {
-  return notifications.filter((n) => n.userId === userId && !n.read).length;
+// ---------------------------------------------------------------------------
+// Products (admin CRUD)
+// ---------------------------------------------------------------------------
+
+export async function createProduct(
+  input: Omit<Product, "id" | "rating" | "reviewCount" | "createdAt">
+): Promise<Product> {
+  const row = await prisma.product.create({
+    data: {
+      slug: input.slug,
+      name: input.name,
+      description: input.description,
+      price: input.price,
+      comparePrice: input.comparePrice ?? null,
+      stock: input.stock,
+      featured: input.featured,
+      categoryId: input.categoryId,
+      metaTitle: input.metaTitle,
+      metaDescription: input.metaDescription,
+      images: { create: input.images },
+      variants: {
+      create: input.variants.map((v) => ({
+        label: v.label,
+        stock: v.stock,
+        priceDiff: v.priceDiff,
+      })),
+    },
+    },
+    include: productInclude,
+  });
+  return mapProduct(row);
 }
 
-export async function markNotificationRead(id: string, userId: string): Promise<boolean> {
-  const n = notifications.find((n) => n.id === id && n.userId === userId);
-  if (!n) return false;
-  n.read = true;
-  return true;
-}
-
-export async function markAllNotificationsRead(userId: string): Promise<number> {
-  let count = 0;
-  for (const n of notifications) {
-    if (n.userId === userId && !n.read) {
-      n.read = true;
-      count++;
-    }
+export async function updateProduct(id: string, patch: Partial<Product>): Promise<Product | null> {
+  const scalarPatch: Record<string, unknown> = { ...patch };
+  delete scalarPatch.images;
+  delete scalarPatch.variants;
+  delete scalarPatch.id;
+  delete scalarPatch.createdAt;
+  try {
+    const row = await prisma.product.update({
+      where: { id },
+      data: scalarPatch,
+      include: productInclude,
+    });
+    return mapProduct(row);
+  } catch {
+    return null;
   }
-  return count;
+}
+
+export async function deleteProduct(id: string): Promise<boolean> {
+  try {
+    await prisma.product.delete({ where: { id } });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Wishlist
+// ---------------------------------------------------------------------------
+
+export async function getWishlistForUser(userId: string): Promise<Product[]> {
+  const rows = await prisma.wishlist.findMany({
+    where: { userId },
+    include: { product: { include: productInclude } },
+  });
+  return rows.map((w) => mapProduct(w.product));
+}
+
+export async function isInWishlist(userId: string, productId: string): Promise<boolean> {
+  const row = await prisma.wishlist.findUnique({
+    where: { userId_productId: { userId, productId } },
+  });
+  return !!row;
+}
+
+export async function toggleWishlist(
+  userId: string,
+  productId: string
+): Promise<{ inWishlist: boolean }> {
+  const existing = await prisma.wishlist.findUnique({
+    where: { userId_productId: { userId, productId } },
+  });
+  if (existing) {
+    await prisma.wishlist.delete({ where: { id: existing.id } });
+    return { inWishlist: false };
+  }
+  await prisma.wishlist.create({ data: { userId, productId } });
+  return { inWishlist: true };
+}
+
+// ---------------------------------------------------------------------------
+// Reviews
+// ---------------------------------------------------------------------------
+
+function mapReview(r: {
+  id: string;
+  userId: string;
+  userName: string;
+  productId: string;
+  rating: number;
+  comment: string;
+  approved: boolean;
+  createdAt: Date;
+}): import("./types").Review {
+  return {
+    id: r.id,
+    userId: r.userId,
+    userName: r.userName,
+    productId: r.productId,
+    rating: r.rating,
+    comment: r.comment,
+    approved: r.approved,
+    createdAt: r.createdAt.toISOString(),
+  };
+}
+
+async function recalcProductRating(productId: string) {
+  const agg = await prisma.review.aggregate({
+    where: { productId, approved: true },
+    _avg: { rating: true },
+    _count: true,
+  });
+  await prisma.product.update({
+    where: { id: productId },
+    data: { rating: agg._avg.rating ?? 0, reviewCount: agg._count },
+  });
+}
+
+export async function getReviewsForProduct(productId: string) {
+  const rows = await prisma.review.findMany({
+    where: { productId, approved: true },
+    orderBy: { createdAt: "desc" },
+  });
+  return rows.map(mapReview);
+}
+
+export async function createReview(input: {
+  userId: string;
+  userName: string;
+  productId: string;
+  rating: number;
+  comment: string;
+}) {
+  const review = await prisma.review.create({ data: { ...input, approved: true } });
+  await recalcProductRating(input.productId);
+  return mapReview(review);
+}
+
+export async function hasUserReviewed(userId: string, productId: string): Promise<boolean> {
+  const row = await prisma.review.findFirst({ where: { userId, productId } });
+  return !!row;
+}
+
+export async function getAllReviews() {
+  const rows = await prisma.review.findMany({ orderBy: { createdAt: "desc" } });
+  return rows.map(mapReview);
+}
+
+export async function setReviewApproved(reviewId: string, approved: boolean) {
+  try {
+    const review = await prisma.review.update({ where: { id: reviewId }, data: { approved } });
+    await recalcProductRating(review.productId);
+    return mapReview(review);
+  } catch {
+    return null;
+  }
+}
+
+export async function deleteReview(reviewId: string): Promise<boolean> {
+  try {
+    const review = await prisma.review.delete({ where: { id: reviewId } });
+    await recalcProductRating(review.productId);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Password reset
+// ---------------------------------------------------------------------------
+
+export async function createResetToken(userId: string): Promise<string> {
+  const token = `${userId}.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+  await prisma.passwordResetToken.create({
+    data: { token, userId, expiresAt: new Date(Date.now() + 60 * 60 * 1000) },
+  });
+  return token;
+}
+
+export async function consumeResetToken(token: string): Promise<string | null> {
+  const entry = await prisma.passwordResetToken.findUnique({ where: { token } });
+  if (!entry) return null;
+  await prisma.passwordResetToken.delete({ where: { token } });
+  if (entry.expiresAt.getTime() < Date.now()) return null;
+  return entry.userId;
+}
+
+export async function setUserPassword(userId: string, newPassword: string): Promise<boolean> {
+  try {
+    await prisma.user.update({
+      where: { id: userId },
+      data: { passwordHash: bcrypt.hashSync(newPassword, 10) },
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }

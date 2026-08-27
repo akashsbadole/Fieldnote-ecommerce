@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Search, ShoppingBag, User, Menu, X } from "lucide-react";
 import { useSession, signOut } from "next-auth/react";
 import { useCartStore } from "@/lib/store/cart-store";
@@ -22,6 +22,9 @@ export function Header() {
   const itemCount = useCartStore((s) => s.itemCount());
   const [mobileOpen, setMobileOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => setHydrated(true), []);
+  const displayCount = hydrated ? itemCount : 0;
 
   return (
     <header className="sticky top-0 z-30 border-b border-line bg-paper/95 backdrop-blur">
@@ -101,14 +104,15 @@ export function Header() {
           <NotificationBell />
 
           <button
-            aria-label={`Open cart, ${itemCount} items`}
+            aria-label={`Open cart, ${displayCount} items`}
             className="relative cursor-pointer text-ink-soft hover:text-forest"
             onClick={openCart}
+            suppressHydrationWarning
           >
             <ShoppingBag className="h-5 w-5" />
-            {itemCount > 0 && (
+            {displayCount > 0 && (
               <span className="absolute -right-2 -top-2 flex h-4 w-4 items-center justify-center rounded-full bg-rust font-mono text-[0.6rem] text-paper">
-                {itemCount}
+                {displayCount}
               </span>
             )}
           </button>

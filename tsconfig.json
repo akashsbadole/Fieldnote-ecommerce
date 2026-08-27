@@ -30,10 +30,5 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": [
-    "node_modules",
-    "src/lib/data.db.ts",
-    "src/lib/prisma.ts",
-    "prisma/seed.ts"
-  ]
+  "exclude": ["node_modules"]
 }
