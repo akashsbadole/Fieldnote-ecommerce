@@ -1,0 +1,105 @@
+@import "tailwindcss";
+
+@theme {
+  /* Color tokens — Fieldnote: a field-journal for outdoor gear */
+  --color-paper: #f6f3ec;
+  --color-paper-dim: #efe9db;
+  --color-ink: #1c1b17;
+  --color-ink-soft: #3a382f;
+  --color-forest: #2b3a2a;
+  --color-forest-dark: #1d2a1c;
+  --color-forest-light: #486044;
+  --color-sand: #cdbfa0;
+  --color-sand-light: #e4dac2;
+  --color-rust: #b1461f;
+  --color-rust-dark: #8f3717;
+  --color-line: #dad3c2;
+  --color-muted: #6e6858;
+  --color-ok: #3f6b3f;
+  --color-warn: #b1461f;
+
+  /*
+   * Font stack note: this sandbox can't reach fonts.googleapis.com, so
+   * these fall back to close system equivalents. Once deployed somewhere
+   * with normal network access, swap back to next/font/google with
+   * Fraunces / Inter / IBM Plex Mono for the real brand type — see the
+   * commented-out block in src/app/layout.tsx history / README.
+   */
+  --font-display: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, ui-serif, serif;
+  --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", ui-sans-serif, Helvetica, Arial, sans-serif;
+  --font-mono: "SF Mono", "Cascadia Code", "Fira Code", Consolas, ui-monospace, monospace;
+
+  --animate-fade-up: fade-up 0.5s ease both;
+
+  @keyframes fade-up {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background-color: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-body);
+}
+
+::selection {
+  background-color: var(--color-rust);
+  color: var(--color-paper);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-rust);
+  outline-offset: 2px;
+}
+
+/* Signature: hand-stitched dashed border used on gear cards + tags */
+.stitched {
+  position: relative;
+}
+.stitched::after {
+  content: "";
+  position: absolute;
+  inset: 6px;
+  border: 1px dashed color-mix(in srgb, var(--color-ink) 18%, transparent);
+  pointer-events: none;
+}
+
+/* Signature: field-label monospace tag */
+.spec-row {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
+  color: var(--color-muted);
+  border-top: 1px solid var(--color-line);
+  padding: 0.25rem 0;
+}
+
+.paper-texture {
+  background-image: radial-gradient(
+    color-mix(in srgb, var(--color-ink) 4%, transparent) 0.5px,
+    transparent 0.5px
+  );
+  background-size: 6px 6px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
