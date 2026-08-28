@@ -548,6 +548,36 @@ export async function verifyPassword(user: User, password: string): Promise<bool
   return bcrypt.compare(password, user.passwordHash);
 }
 
+async function getEffectiveTaxPercent(
+  country: string,
+  region?: string | null,
+  prismaClient: typeof prisma = prisma
+): Promise<number> {
+  // Try region-specific GST first (e.g. KA → 18%)
+  if (region) {
+    const regional = await prismaClient.taxRate.findFirst({
+      where: { country, region: region.trim(), active: true },
+    });
+    if (regional) return regional.ratePercent;
+    // Upper/lower case guard
+    const regionalCI = await prismaClient.taxRate.findFirst({
+      where: { country: { equals: country, mode: "insensitive" }, region: { equals: region.trim(), mode: "insensitive" }, active: true },
+    });
+    if (regionalCI) return regionalCI.ratePercent;
+  }
+  const national = await prismaClient.taxRate.findFirst({
+    where: { country: { equals: country, mode: "insensitive" }, region: null, active: true },
+  });
+  if (national) return national.ratePercent;
+  // Fallback to India default, else store default
+  const indiaDefault = await prismaClient.taxRate.findFirst({
+    where: { country: "India", region: null, active: true },
+  });
+  if (indiaDefault) return indiaDefault.ratePercent;
+  const settings = await prismaClient.storeSettings.findUnique({ where: { id: "default" } });
+  return settings?.defaultTaxPercent ?? 18;
+}
+
 export async function createOrder(input: {
   userId: string;
   items: OrderItem[];
@@ -559,8 +589,13 @@ export async function createOrder(input: {
   const subtotal = input.items.reduce((sum, i) => sum + i.price * i.quantity, 0);
   const discount = Math.min(input.discount ?? 0, subtotal);
   const discountedSubtotal = subtotal - discount;
-  const shipping = discountedSubtotal > 10000 ? 0 : 700;
-  const tax = Math.round(discountedSubtotal * 0.08);
+  // Shipping thresholds from StoreSettings (₹500 free, else ₹70) — fallback to hardcoded INR defaults
+  const settings = await prisma.storeSettings.findUnique({ where: { id: "default" } });
+  const freeThreshold = settings?.freeShippingThreshold ?? 50000;
+  const flatRate = settings?.flatShippingRate ?? 7000;
+  const shipping = discountedSubtotal >= freeThreshold ? 0 : flatRate;
+  const taxPercent = await getEffectiveTaxPercent(input.shippingAddress.country, input.shippingAddress.state);
+  const tax = Math.round((discountedSubtotal * taxPercent) / 100);
 
   const order = await prisma.$transaction(async (tx) => {
     // shippingAddress passed in has a client-generated id that doesn't

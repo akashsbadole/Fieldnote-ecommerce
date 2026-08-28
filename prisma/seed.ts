@@ -202,11 +202,11 @@ async function main() {
     data: {
       userId: demoUser.id,
       fullName: "Demo Customer",
-      street: "142 Birchwood Ave",
-      city: "Portland",
-      state: "OR",
-      zip: "97205",
-      country: "USA",
+      street: "142, MG Road, Indiranagar",
+      city: "Bengaluru",
+      state: "KA",
+      zip: "560038",
+      country: "India",
       isDefault: true,
     },
   });
@@ -216,9 +216,9 @@ async function main() {
       userId: demoUser.id,
       status: "SHIPPED",
       subtotal: 24300,
-      tax: 1944,
+      tax: 4374, // 18% GST
       shipping: 0,
-      total: 26244,
+      total: 28674,
       shippingAddressId: demoAddress.id,
       trackingNumber: "1Z999AA10123456784",
       items: {
@@ -328,24 +328,37 @@ async function main() {
   // ---- Pages --------------------------------------------------------------
   await prisma.page.upsert({
     where: { slug: "shipping-info" },
-    update: {},
+    update: {
+      content:
+        "We ship standard (3-5 days, free over ₹500) and express (1-2 days, ₹180 flat) across India. GST @ 18% (CGST 9% + SGST 9% intra-state, IGST 18% inter-state) is calculated at checkout based on your shipping state.",
+      metaDescription: "Fieldnote shipping rates, timelines, and coverage across India.",
+    },
     create: {
       slug: "shipping-info",
       title: "Shipping Information",
       content:
-        "We ship standard (3-5 days, free over $100) and express (1-2 days, $18 flat) across the US and Canada.",
+        "We ship standard (3-5 days, free over ₹500) and express (1-2 days, ₹180 flat) across India. GST @ 18% (CGST 9% + SGST 9% intra-state, IGST 18% inter-state) is calculated at checkout based on your shipping state.",
       published: true,
       metaTitle: "Shipping Information — Fieldnote",
-      metaDescription: "Fieldnote shipping rates, timelines, and coverage.",
+      metaDescription: "Fieldnote shipping rates, timelines, and coverage across India.",
     },
   });
 
   // ---- Tax rates ------------------------------------------------------------
+  // Clear old US rates if re-seeding
+  await prisma.taxRate.deleteMany({});
   await prisma.taxRate.createMany({
     data: [
-      { label: "Oregon (no sales tax)", country: "USA", region: "OR", ratePercent: 0, active: true },
-      { label: "California state tax", country: "USA", region: "CA", ratePercent: 7.25, active: true },
-      { label: "Default US rate", country: "USA", region: null, ratePercent: 8, active: true },
+      { label: "GST 0% — Essential (India)", country: "India", region: null, ratePercent: 0, active: true },
+      { label: "GST 5% — Essential goods", country: "India", region: null, ratePercent: 5, active: true },
+      { label: "GST 12% — Standard", country: "India", region: null, ratePercent: 12, active: true },
+      { label: "GST 18% — Standard (default)", country: "India", region: null, ratePercent: 18, active: true },
+      { label: "GST 28% — Luxury", country: "India", region: null, ratePercent: 28, active: true },
+      // Intra-state examples (CGST+SGST split displayed in invoice)
+      { label: "Karnataka GST 18% (CGST 9%+SGST 9%)", country: "India", region: "KA", ratePercent: 18, active: true },
+      { label: "Maharashtra GST 18% (CGST 9%+SGST 9%)", country: "India", region: "MH", ratePercent: 18, active: true },
+      { label: "Delhi GST 18% (CGST 9%+SGST 9%)", country: "India", region: "DL", ratePercent: 18, active: true },
+      { label: "Tamil Nadu GST 18%", country: "India", region: "TN", ratePercent: 18, active: true },
     ],
     skipDuplicates: true,
   });
@@ -353,13 +366,24 @@ async function main() {
   // ---- Store settings ---------------------------------------------------
   await prisma.storeSettings.upsert({
     where: { id: "default" },
-    update: {},
+    update: {
+      currency: "INR",
+      addressLine: "142, MG Road, Bengaluru, KA 560001",
+      flatShippingRate: 7000,
+      expressShippingRate: 18000,
+      freeShippingThreshold: 50000,
+      defaultTaxPercent: 18,
+    },
     create: {
       id: "default",
       storeName: "Fieldnote",
       supportEmail: "support@fieldnote.co",
-      currency: "USD",
-      addressLine: "142 Birchwood Ave, Portland, OR 97205",
+      currency: "INR",
+      addressLine: "142, MG Road, Bengaluru, KA 560001",
+      flatShippingRate: 7000,
+      expressShippingRate: 18000,
+      freeShippingThreshold: 50000,
+      defaultTaxPercent: 18,
     },
   });
 

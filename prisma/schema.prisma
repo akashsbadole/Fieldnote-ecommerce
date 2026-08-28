@@ -227,12 +227,12 @@ model StoreSettings {
   id                     String  @id @default("default")
   storeName              String  @default("Fieldnote")
   supportEmail           String  @default("support@fieldnote.co")
-  currency               String  @default("USD")
-  addressLine            String  @default("")
-  freeShippingThreshold  Int     @default(10000)
-  flatShippingRate       Int     @default(700)
-  expressShippingRate    Int     @default(1800)
-  defaultTaxPercent      Float   @default(8)
+  currency               String  @default("INR")
+  addressLine            String  @default("142, MG Road, Bengaluru, KA 560001")
+  freeShippingThreshold  Int     @default(50000) // ₹500 in paise
+  flatShippingRate       Int     @default(7000) // ₹70
+  expressShippingRate    Int     @default(18000) // ₹180
+  defaultTaxPercent      Float   @default(18) // GST default
   metaTitle              String  @default("Fieldnote — Gear for the field")
   metaDescription        String  @default("")
   socialInstagram        String?

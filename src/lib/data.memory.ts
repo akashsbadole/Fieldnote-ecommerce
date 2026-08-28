@@ -347,19 +347,25 @@ export const pages: Page[] = [
     slug: "shipping-info",
     title: "Shipping Information",
     content:
-      "We ship standard (3-5 days, free over $100) and express (1-2 days, $18 flat) across the US and Canada.",
+      "We ship standard (3-5 days, free over ₹500) and express (1-2 days, ₹180 flat) across India. GST @ 18% (CGST 9% + SGST 9% intra-state, IGST 18% inter-state) is calculated at checkout based on your shipping state.",
     published: true,
     metaTitle: "Shipping Information — Fieldnote",
-    metaDescription: "Fieldnote shipping rates, timelines, and coverage.",
+    metaDescription: "Fieldnote shipping rates, timelines, and coverage across India.",
     createdAt: "2026-01-15",
     updatedAt: "2026-01-15",
   },
 ];
 
 export const taxRates: TaxRate[] = [
-  { id: "tax_or", label: "Oregon (no sales tax)", country: "USA", region: "OR", ratePercent: 0, active: true },
-  { id: "tax_ca", label: "California state tax", country: "USA", region: "CA", ratePercent: 7.25, active: true },
-  { id: "tax_default", label: "Default US rate", country: "USA", ratePercent: 8, active: true },
+  { id: "tax_gst0", label: "GST 0% — Essential (India)", country: "India", ratePercent: 0, active: true },
+  { id: "tax_gst5", label: "GST 5% — Essential goods", country: "India", ratePercent: 5, active: true },
+  { id: "tax_gst12", label: "GST 12% — Standard", country: "India", ratePercent: 12, active: true },
+  { id: "tax_gst18", label: "GST 18% — Standard (default)", country: "India", ratePercent: 18, active: true },
+  { id: "tax_gst28", label: "GST 28% — Luxury", country: "India", ratePercent: 28, active: true },
+  { id: "tax_ka", label: "Karnataka GST 18% (CGST 9%+SGST 9%)", country: "India", region: "KA", ratePercent: 18, active: true },
+  { id: "tax_mh", label: "Maharashtra GST 18% (CGST 9%+SGST 9%)", country: "India", region: "MH", ratePercent: 18, active: true },
+  { id: "tax_dl", label: "Delhi GST 18% (CGST 9%+SGST 9%)", country: "India", region: "DL", ratePercent: 18, active: true },
+  { id: "tax_tn", label: "Tamil Nadu GST 18%", country: "India", region: "TN", ratePercent: 18, active: true },
 ];
 
 export const coupons: Coupon[] = [
@@ -379,12 +385,12 @@ export const coupons: Coupon[] = [
 export const storeSettings: StoreSettings = {
   storeName: "Fieldnote",
   supportEmail: "support@fieldnote.co",
-  currency: "USD",
-  addressLine: "142 Birchwood Ave, Portland, OR 97205",
-  freeShippingThreshold: 10000,
-  flatShippingRate: 700,
-  expressShippingRate: 1800,
-  defaultTaxPercent: 8,
+  currency: "INR",
+  addressLine: "142, MG Road, Bengaluru, KA 560001",
+  freeShippingThreshold: 50000,
+  flatShippingRate: 7000,
+  expressShippingRate: 18000,
+  defaultTaxPercent: 18,
   metaTitle: "Fieldnote — Gear for the field",
   metaDescription: "Packs, outerwear and tools built to be used hard and repaired, not replaced.",
   socialInstagram: "",
@@ -649,6 +655,26 @@ export async function verifyPassword(user: User, password: string): Promise<bool
   return bcrypt.compare(password, user.passwordHash);
 }
 
+function getEffectiveTaxPercentMemory(country: string, region?: string | null): number {
+  const normCountry = country.trim().toLowerCase();
+  const normRegion = region?.trim().toLowerCase() || null;
+  if (normRegion) {
+    const regional = taxRates.find(
+      (t) => t.active && t.country.toLowerCase() === normCountry && t.region?.toLowerCase() === normRegion
+    );
+    if (regional) return regional.ratePercent;
+  }
+  const national = taxRates.find(
+    (t) => t.active && t.country.toLowerCase() === normCountry && !t.region
+  );
+  if (national) return national.ratePercent;
+  const indiaFallback = taxRates.find(
+    (t) => t.active && t.country.toLowerCase() === "india" && !t.region
+  );
+  if (indiaFallback) return indiaFallback.ratePercent;
+  return storeSettings.defaultTaxPercent ?? 18;
+}
+
 export async function createOrder(input: {
   userId: string;
   items: OrderItem[];
@@ -660,8 +686,9 @@ export async function createOrder(input: {
   const subtotal = input.items.reduce((sum, i) => sum + i.price * i.quantity, 0);
   const discount = Math.min(input.discount ?? 0, subtotal);
   const discountedSubtotal = subtotal - discount;
-  const shipping = discountedSubtotal > 10000 ? 0 : 700;
-  const tax = Math.round(discountedSubtotal * 0.08);
+  const shipping = discountedSubtotal >= storeSettings.freeShippingThreshold ? 0 : storeSettings.flatShippingRate;
+  const taxPercent = getEffectiveTaxPercentMemory(input.shippingAddress.country, input.shippingAddress.state);
+  const tax = Math.round((discountedSubtotal * taxPercent) / 100);
   const order: Order = {
     id: `ord_${orderSeq++}`,
     userId: input.userId,

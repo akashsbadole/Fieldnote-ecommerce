@@ -14,11 +14,11 @@ const FAQS = [
   },
   {
     q: "Do you ship internationally?",
-    a: "Currently the US and Canada. We're working on EU shipping for next year.",
+    a: "Currently across India (all states & UTs). International shipping is on the roadmap.",
   },
   {
     q: "How long does shipping take?",
-    a: "Standard is 3–5 business days and free over $100 ($7 flat otherwise). Express is 1–2 days for $18.",
+    a: "Standard is 3–5 business days and free over ₹500 (₹70 flat otherwise). Express is 1–2 days for ₹180. GST 18% applies at checkout.",
   },
   {
     q: "Can I change or cancel an order?",

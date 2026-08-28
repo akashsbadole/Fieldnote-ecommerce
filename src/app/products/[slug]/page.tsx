@@ -142,7 +142,7 @@ export default async function ProductPage({
             </div>
             <div className="flex justify-between py-2 font-mono text-xs">
               <dt className="text-muted">Shipping</dt>
-              <dd className="text-ink-soft">Free over $100, else $7 flat</dd>
+              <dd className="text-ink-soft">Free over ₹500, else ₹70 flat — GST 18% extra</dd>
             </div>
             <div className="flex justify-between py-2 font-mono text-xs">
               <dt className="text-muted">Returns</dt>
