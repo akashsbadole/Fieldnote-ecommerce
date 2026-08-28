@@ -1,9 +1,9 @@
 import { z } from "zod";
 
 export const registerSchema = z.object({
-  name: z.string().min(2, "Name must be at least 2 characters"),
-  email: z.string().email("Enter a valid email"),
-  password: z.string().min(8, "Password must be at least 8 characters"),
+  name: z.string().min(2, "Name must be at least 2 characters").max(100),
+  email: z.string().email("Enter a valid email").max(254),
+  password: z.string().min(8, "Password must be at least 8 characters").max(128),
 });
 export type RegisterInput = z.infer<typeof registerSchema>;
 
@@ -31,12 +31,12 @@ export const otpVerifySchema = z.object({
 export type OtpVerifyInput = z.infer<typeof otpVerifySchema>;
 
 export const addressSchema = z.object({
-  fullName: z.string().min(2, "Full name is required"),
-  street: z.string().min(3, "Street address is required"),
-  city: z.string().min(2, "City is required"),
-  state: z.string().min(2, "State is required"),
-  zip: z.string().min(3, "ZIP / postal code is required"),
-  country: z.string().min(2, "Country is required"),
+  fullName: z.string().min(2, "Full name is required").max(100),
+  street: z.string().min(3, "Street address is required").max(200),
+  city: z.string().min(2, "City is required").max(100),
+  state: z.string().min(2, "State is required").max(100),
+  zip: z.string().min(3, "ZIP / postal code is required").max(20),
+  country: z.string().min(2, "Country is required").max(56),
 });
 export type AddressInput = z.infer<typeof addressSchema>;
 
@@ -47,17 +47,17 @@ export const checkoutSchema = z.object({
 export type CheckoutInput = z.infer<typeof checkoutSchema>;
 
 export const productSchema = z.object({
-  name: z.string().min(2, "Name is required"),
-  description: z.string().min(10, "Description should be at least 10 characters"),
-  price: z.coerce.number().min(1, "Price must be greater than 0"),
-  comparePrice: z.coerce.number().optional(),
-  stock: z.coerce.number().min(0, "Stock can't be negative"),
-  categoryId: z.string().min(1, "Choose a category"),
+  name: z.string().min(2, "Name is required").max(120),
+  description: z.string().min(10, "Description should be at least 10 characters").max(5000),
+  price: z.coerce.number().int().min(1, "Price must be greater than 0").max(100000000, "Price too large"),
+  comparePrice: z.coerce.number().int().optional(),
+  stock: z.coerce.number().int().min(0, "Stock can't be negative").max(1000000),
+  categoryId: z.string().min(1, "Choose a category").max(50),
   featured: z.boolean().optional(),
-  metaTitle: z.string().optional(),
-  metaDescription: z.string().optional(),
-  imageUrl: z.string().url("Enter a valid URL").optional().or(z.literal("")),
-  variantsJson: z.string().optional(),
+  metaTitle: z.string().max(60).optional(),
+  metaDescription: z.string().max(160).optional(),
+  imageUrl: z.string().url("Enter a valid URL").max(2048).optional().or(z.literal("")),
+  variantsJson: z.string().max(5000).optional(),
 });
 export type ProductInput = z.infer<typeof productSchema>;
 

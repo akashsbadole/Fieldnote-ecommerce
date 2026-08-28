@@ -1,5 +1,6 @@
 import "server-only";
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
 import type {
   Category,
   Product,
@@ -636,10 +637,11 @@ export async function createUser(input: { email: string; password: string; name:
   const existing = await getUserByEmail(input.email);
   if (existing) throw new Error("An account with this email already exists.");
 
+  const hash = await bcrypt.hash(input.password, 12);
   const user: User = {
     id: `u_${Date.now()}`,
     email: input.email,
-    passwordHash: bcrypt.hashSync(input.password, 10),
+    passwordHash: hash,
     name: input.name,
     role: "CUSTOMER",
     blocked: false,
@@ -1176,13 +1178,16 @@ export async function deleteReview(reviewId: string): Promise<boolean> {
 // ---------------------------------------------------------------------------
 
 export async function createResetToken(userId: string): Promise<string> {
-  const token = `${userId}.${Date.now()}.${Math.random().toString(36).slice(2)}`;
-  resetTokens.push({ token, userId, expiresAt: Date.now() + 60 * 60 * 1000 });
+  const raw = crypto.randomBytes(32).toString("hex");
+  const token = `${userId}.${raw}`;
+  const hashed = hashToken(token);
+  resetTokens.push({ token: hashed, userId, expiresAt: Date.now() + 60 * 60 * 1000 });
   return token;
 }
 
 export async function consumeResetToken(token: string): Promise<string | null> {
-  const idx = resetTokens.findIndex((t) => t.token === token);
+  const hashed = hashToken(token);
+  const idx = resetTokens.findIndex((t) => t.token === hashed);
   if (idx === -1) return null;
   const entry = resetTokens[idx];
   resetTokens.splice(idx, 1);
@@ -1193,7 +1198,7 @@ export async function consumeResetToken(token: string): Promise<string | null> {
 export async function setUserPassword(userId: string, newPassword: string): Promise<boolean> {
   const user = users.find((u) => u.id === userId);
   if (!user) return false;
-  user.passwordHash = bcrypt.hashSync(newPassword, 10);
+  user.passwordHash = await bcrypt.hash(newPassword, 12);
   return true;
 }
 
@@ -1201,8 +1206,12 @@ export async function setUserPassword(userId: string, newPassword: string): Prom
 // Mobile OTP login
 // ---------------------------------------------------------------------------
 
+function hashToken(token: string): string {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
+
 function generateOtpCode(): string {
-  return Math.floor(100000 + Math.random() * 900000).toString();
+  return crypto.randomInt(100000, 1000000).toString();
 }
 
 export async function issueOtp(phone: string): Promise<string> {
@@ -1244,7 +1253,7 @@ export async function createNotification(input: {
   link?: string;
 }): Promise<Notification> {
   const notification: Notification = {
-    id: `notif_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    id: `notif_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`,
     userId: input.userId,
     type: input.type,
     title: input.title,

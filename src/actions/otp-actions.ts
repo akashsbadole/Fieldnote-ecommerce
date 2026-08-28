@@ -42,13 +42,16 @@ export async function requestOtpAction(phone: string): Promise<RequestOtpResult>
     return { success: false, message: "Couldn't send the code. Try again shortly." };
   }
 
+  const isDev = process.env.NODE_ENV !== "production";
   return {
     success: true,
     message:
       result.mode === "logged"
-        ? "Code generated (SMS isn't configured — shown below for testing)."
+        ? isDev
+          ? "Code generated (SMS isn't configured — shown below for testing)."
+          : "Code generated — check server logs or configure SMS."
         : "Code sent by text message.",
-    devCode: result.mode === "logged" ? code : undefined,
+    devCode: result.mode === "logged" && isDev ? code : undefined,
   };
 }
 

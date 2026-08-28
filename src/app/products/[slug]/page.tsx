@@ -80,7 +80,7 @@ export default async function ProductPage({
     <div className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd).replace(/</g, "\\u003c") }}
       />
       <nav className="mb-8 font-mono text-xs text-muted">
         <Link href="/" className="hover:text-forest">Home</Link>

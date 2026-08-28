@@ -95,6 +95,14 @@ export function orderStatusUpdateEmail(order: Order, customerName: string) {
 }
 
 export function passwordResetEmail(resetUrl: string) {
+  // Validate URL is http/https and same host as APP_URL to prevent javascript: injection via NEXT_PUBLIC_APP_URL poisoning
+  let safeUrl = "#";
+  try {
+    const u = new URL(resetUrl);
+    if (u.protocol === "http:" || u.protocol === "https:") safeUrl = u.toString();
+  } catch {
+    safeUrl = "#";
+  }
   return `
     <div style="${BASE_STYLE}">
       ${HEADER("PASSWORD RESET")}
@@ -103,7 +111,7 @@ export function passwordResetEmail(resetUrl: string) {
         click below — this link expires in 1 hour.
       </p>
       <p style="margin: 24px 0;">
-        <a href="${resetUrl}" style="background: #b1461f; color: #f6f3ec; padding: 12px 20px; text-decoration: none; font-size: 13px; display: inline-block;">
+        <a href="${escapeAttribute(safeUrl)}" style="background: #b1461f; color: #f6f3ec; padding: 12px 20px; text-decoration: none; font-size: 13px; display: inline-block;">
           Reset password
         </a>
       </p>
@@ -120,5 +128,11 @@ function escapeHtml(str: string): string {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;")
+    .replace(/`/g, "&#96;");
+}
+
+function escapeAttribute(str: string): string {
+  return escapeHtml(str).replace(/=/g, "&#61;");
 }

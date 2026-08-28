@@ -1,5 +1,6 @@
 import "server-only";
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
 import { prisma } from "./prisma";
 import { slugify } from "./utils";
 import type {
@@ -532,10 +533,11 @@ export async function createUser(input: { email: string; password: string; name:
   const existing = await getUserByEmail(input.email);
   if (existing) throw new Error("An account with this email already exists.");
 
+  const hash = await bcrypt.hash(input.password, 12);
   const row = await prisma.user.create({
     data: {
       email: input.email,
-      passwordHash: bcrypt.hashSync(input.password, 10),
+      passwordHash: hash,
       name: input.name,
       role: "CUSTOMER",
     },
@@ -1123,7 +1125,7 @@ export async function markAllNotificationsRead(userId: string): Promise<number> 
 // ---------------------------------------------------------------------------
 
 function generateOtpCode(): string {
-  return Math.floor(100000 + Math.random() * 900000).toString();
+  return crypto.randomInt(100000, 1000000).toString();
 }
 
 export async function issueOtp(phone: string): Promise<string> {
@@ -1362,27 +1364,35 @@ export async function deleteReview(reviewId: string): Promise<boolean> {
 // Password reset
 // ---------------------------------------------------------------------------
 
+function hashToken(token: string): string {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
+
 export async function createResetToken(userId: string): Promise<string> {
-  const token = `${userId}.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+  const raw = crypto.randomBytes(32).toString("hex");
+  const token = `${userId}.${raw}`;
+  const hashed = hashToken(token);
   await prisma.passwordResetToken.create({
-    data: { token, userId, expiresAt: new Date(Date.now() + 60 * 60 * 1000) },
+    data: { token: hashed, userId, expiresAt: new Date(Date.now() + 60 * 60 * 1000) },
   });
   return token;
 }
 
 export async function consumeResetToken(token: string): Promise<string | null> {
-  const entry = await prisma.passwordResetToken.findUnique({ where: { token } });
+  const hashed = hashToken(token);
+  const entry = await prisma.passwordResetToken.findUnique({ where: { token: hashed } });
   if (!entry) return null;
-  await prisma.passwordResetToken.delete({ where: { token } });
+  await prisma.passwordResetToken.delete({ where: { token: hashed } });
   if (entry.expiresAt.getTime() < Date.now()) return null;
   return entry.userId;
 }
 
 export async function setUserPassword(userId: string, newPassword: string): Promise<boolean> {
   try {
+    const hash = await bcrypt.hash(newPassword, 12);
     await prisma.user.update({
       where: { id: userId },
-      data: { passwordHash: bcrypt.hashSync(newPassword, 10) },
+      data: { passwordHash: hash },
     });
     return true;
   } catch {

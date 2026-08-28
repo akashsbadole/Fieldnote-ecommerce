@@ -68,14 +68,22 @@ export async function placeOrderAction(
     };
   }
 
-  if (input.items.length === 0) {
-    return { success: false, message: "Your cart is empty." };
+  if (input.items.length === 0 || input.items.length > 50) {
+    return { success: false, message: "Your cart is empty or too large." };
+  }
+  for (const line of input.items) {
+    if (!Number.isInteger(line.quantity) || line.quantity < 1 || line.quantity > 999) {
+      return { success: false, message: "Invalid quantity." };
+    }
+    if (line.variant && line.variant.length > 100) {
+      return { success: false, message: "Invalid variant." };
+    }
   }
 
   // If Stripe is configured, require and verify a succeeded PaymentIntent
   // before creating the order — never trust the client on whether payment
   // went through. In demo mode (no Stripe keys set) this check is skipped
-  // so the flow still works end-to-end.
+  // so the flow still works end-to-end — but block free orders in production.
   if (isStripeConfigured && stripe) {
     if (!input.paymentIntentId) {
       return { success: false, message: "Payment was not completed." };
@@ -84,6 +92,15 @@ export async function placeOrderAction(
     if (intent.status !== "succeeded") {
       return { success: false, message: "Payment has not been confirmed yet." };
     }
+    if (intent.currency.toLowerCase() !== "inr") {
+      return { success: false, message: "Currency mismatch." };
+    }
+    if (intent.metadata?.userId && intent.metadata.userId !== session.user.id) {
+      return { success: false, message: "Payment does not match this account." };
+    }
+    // Verify amount matches server-calculated total (computed below after orderItems)
+  } else if (process.env.NODE_ENV === "production") {
+    return { success: false, message: "Payments not configured — cannot place order in production." };
   }
 
   const orderItems: OrderItem[] = [];
@@ -103,6 +120,9 @@ export async function placeOrderAction(
       quantity: line.quantity,
       price: product.price,
     });
+  }
+  if (orderItems.length === 0) {
+    return { success: false, message: "No valid products in cart." };
   }
 
   const shippingAddress: Address = {
@@ -139,6 +159,37 @@ export async function placeOrderAction(
       return { success: false, message: result.message ?? "That coupon code is no longer valid." };
     }
     discount = result.discount ?? 0;
+  }
+
+  // Re-verify Stripe amount matches server-calculated total (prevents price manipulation)
+  if (isStripeConfigured && stripe && input.paymentIntentId) {
+    const intentCheck = await stripe.paymentIntents.retrieve(input.paymentIntentId);
+    const subtotal = orderItems.reduce((sum, i) => sum + i.price * i.quantity, 0);
+    const discounted = subtotal - discount;
+    // Match createOrder shipping/tax logic (fetch settings for thresholds)
+    const { getStoreSettings } = await import("@/lib/data");
+    const settings = await getStoreSettings();
+    const shipping = discounted >= settings.freeShippingThreshold ? 0 : settings.flatShippingRate;
+    // GST lookup simplified: try to find rate for shipping country, else default
+    let taxPercent = settings.defaultTaxPercent;
+    try {
+      const { prisma } = await import("@/lib/prisma");
+      const rate = await prisma.taxRate.findFirst({
+        where: { country: addressParsed.data.country, region: addressParsed.data.state, active: true },
+      });
+      if (rate) taxPercent = rate.ratePercent;
+      else {
+        const fallback = await prisma.taxRate.findFirst({
+          where: { country: addressParsed.data.country, region: null, active: true },
+        });
+        if (fallback) taxPercent = fallback.ratePercent;
+      }
+    } catch {}
+    const tax = Math.round((discounted * taxPercent) / 100);
+    const expectedTotal = discounted + tax + shipping;
+    if (intentCheck.amount !== expectedTotal) {
+      return { success: false, message: `Payment amount mismatch. Expected ${expectedTotal}, got ${intentCheck.amount}.` };
+    }
   }
 
   const order = await createOrder({

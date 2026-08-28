@@ -32,13 +32,13 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json().catch(() => null);
   const amount = Number(body?.amount);
-  if (!amount || amount < 50) {
+  if (!amount || !Number.isFinite(amount) || amount < 50 || amount > 100000000) {
     return NextResponse.json({ error: "Invalid amount." }, { status: 400 });
   }
 
   const intent = await stripe.paymentIntents.create({
     amount: Math.round(amount),
-    currency: "usd",
+    currency: "inr",
     automatic_payment_methods: { enabled: true },
     metadata: { userId: session.user.id },
   });

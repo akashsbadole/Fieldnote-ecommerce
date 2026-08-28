@@ -4,6 +4,7 @@ import Credentials from "next-auth/providers/credentials";
 import Google from "next-auth/providers/google";
 import {
   getUserByEmail,
+  getUserById,
   verifyPassword,
   getUserByPhone,
   createUserByPhone,
@@ -107,6 +108,10 @@ if (isGoogleConfigured) {
   );
 }
 
+if (!process.env.AUTH_SECRET || process.env.AUTH_SECRET.length < 32) {
+  throw new Error("AUTH_SECRET must be set and at least 32 characters");
+}
+
 export const { handlers, signIn, signOut, auth } = NextAuth({
   // 30-day sessions. Requested specifically for the mobile OTP login flow,
   // and applied session-wide since NextAuth's JWT strategy configures
@@ -117,6 +122,17 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
   session: { strategy: "jwt", maxAge: THIRTY_DAYS },
   jwt: { maxAge: THIRTY_DAYS },
   trustHost: true,
+  cookies: {
+    sessionToken: {
+      name: `__Secure-authjs.session-token`,
+      options: {
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+        secure: process.env.NODE_ENV === "production",
+      },
+    },
+  },
   pages: {
     signIn: "/login",
   },
@@ -127,9 +143,22 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         token.id = user.id as string;
         token.role = (user as { role?: string }).role ?? "CUSTOMER";
         token.phone = (user as { phone?: string }).phone;
-        // `user` is only present on the sign-in request itself, not on
-        // subsequent token refreshes — so this fires exactly once per login.
         await recordLogin(user.id as string);
+        return token;
+      }
+      // Re-validate on every request: blocked users and role changes invalidate JWT
+      if (token.id) {
+        try {
+          const fresh = await getUserById(token.id as string);
+          if (!fresh || fresh.blocked) {
+            (token as unknown as Record<string, unknown>).blocked = true;
+            token.role = "CUSTOMER";
+          } else if (fresh.role !== token.role) {
+            token.role = fresh.role;
+          }
+        } catch {
+          // On DB failure, keep existing token (fail open for availability)
+        }
       }
       return token;
     },
@@ -138,6 +167,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         session.user.id = token.id as string;
         session.user.role = token.role as "ADMIN" | "CUSTOMER";
         session.user.phone = token.phone as string | undefined;
+        (session.user as unknown as Record<string, unknown>).blocked = (token as unknown as Record<string, unknown>).blocked;
       }
       return session;
     },
